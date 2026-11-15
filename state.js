@@ -174,8 +174,9 @@
   }
 
   /* ---------- check-ins ---------- */
-  function tick(m) { S.clock = Math.min(S.clock + (m || 2), 1440 + E.ROLLOVER - 1); }
-  function catchUpClock(stack) { if (S.clock < stack.mins - 60) S.clock = stack.mins - 2; }
+  // Demo clock only: logging nudges the pretend clock along. In Live mode the clock is the real one and is never moved.
+  function tick(m) { if (S.clockMode === 'live') return; S.clock = Math.min(S.clock + (m || 2), 1440 + E.ROLLOVER - 1); }
+  function catchUpClock(stack) { if (S.clockMode === 'live') return; if (S.clock < stack.mins - 60) S.clock = stack.mins - 2; }
 
   /* Dose state machine (strict): none -> out -> answered;  none -> answered;  out -> none (put back).
    * Any other transition is ignored, so a stray second tap can never rewrite the record or pay twice. */
@@ -642,7 +643,7 @@
    * Edits apply from now on the same way and never rewrite a past day (history snapshots are never recompiled). */
   function upsertMed(med) {
     var i = S.meds.map(function (m) { return m.id; }).indexOf(med.id);
-    if (i >= 0) S.meds[i] = med; else { med.id = med.id || nid('m'); if (med.createdDay == null) med.createdDay = S.day; S.meds.push(med); }
+    if (i >= 0) S.meds[i] = med; else { if (!med.id) { do { med.id = nid('m'); } while (S.meds.some(function (m) { return m.id === med.id; })); } if (med.createdDay == null) med.createdDay = S.day; S.meds.push(med); }
     save(); return med;
   }
   function itemStartsToday(item) {
@@ -677,7 +678,8 @@
     var changed = replanToday();
     var nx = E.nextOccurrences(item, S.day, S.clock, 1)[0] || null;
     save();
-    return { item: item, isNew: isNew, today: changed && E.occursOn(item, S.day) && E.timesOn(item, S.day).length > 0, firstNext: nx };
+    var frozenToday = !isNew && !!S.today && S.today.plan.stacks.some(function (st) { return (S.today.entries[st.id] || S.today.paid[st.id]) && st.doses.some(function (d) { return d.medId === item.id; }); });
+    return { item: item, isNew: isNew, frozen: frozenToday, today: changed && E.occursOn(item, S.day) && E.timesOn(item, S.day).length > 0, firstNext: nx };
   }
   /* replanToday: recompile today's plan from the current items without touching anything already answered.
    * Answered (or pill-out) check-ins keep their exact value; the rest of the 100 is split across the open ones. */
@@ -688,19 +690,24 @@
     if (!locked.length) { t.plan = fresh; t.charge = E.dayCharge(t.plan, t.credits); return true; }
     var lockedIds = locked.map(function (x) { return x.id; });
     var used = function (k) { return locked.reduce(function (a, st) { return a + (st[k] || 0); }, 0); };
-    // P0 fix (v5.5 round 2): a dose's identity is the item plus its slot (its 1st, 2nd... dose of the day), never its clock
-    // time. A slot already answered today stays answered; changing its time applies from tomorrow.
-    var slotKeys = function (stacks) { var n = {}, out = []; stacks.slice().sort(function (a, b) { return a.mins - b.mins; }).forEach(function (st) { (st.doses || []).slice().sort(function (a, b) { return (a.mins || st.mins) - (b.mins || st.mins); }).forEach(function (d) { n[d.medId] = (n[d.medId] || 0) + 1; out.push({ st: st, d: d, key: d.medId + '#' + n[d.medId] }); }); }); return out; };
+    // Round 3 ruling (frozen today): once an item has any answer today (or a pill out), today's plan for that item does not
+    // change. Every schedule edit (add / remove / move a time, how many, pattern) for it starts tomorrow. Items with no
+    // answer today follow the new schedule today (S5). Identity never depends on a clock time.
+    var frozen = {}; locked.forEach(function (st) { (st.doses || []).forEach(function (d) { frozen[d.medId] = 1; }); });
     var lockedSet = {}; locked.forEach(function (st) { lockedSet[st.id] = 1; });
-    var loggedDoses = {}; slotKeys(old.stacks).forEach(function (x) { if (lockedSet[x.st.id]) loggedDoses[x.key] = 1; });
-    var freshKeys = {}; slotKeys(fresh.stacks).forEach(function (x) { freshKeys[x.st.id + '|' + x.d.medId + '|' + x.d.mins] = x.key; });
+    var doses = [];
+    old.stacks.forEach(function (st) { if (st.kind !== 'dose' || lockedSet[st.id]) return; st.doses.forEach(function (d) { if (frozen[d.medId] && medById(d.medId)) doses.push(Object.assign({}, d, { mins: d.mins != null ? d.mins : st.mins })); }); });
+    fresh.stacks.forEach(function (st) { if (st.kind !== 'dose') return; st.doses.forEach(function (d) { if (!frozen[d.medId]) doses.push(Object.assign({}, d)); }); });
+    // regroup by time of day; doses more than 90 minutes apart are separate check-ins (same rule as compilePlan)
+    var groups = {}; doses.forEach(function (d) { var sl = E.slotFor(d.mins); (groups[sl.id] = groups[sl.id] || { slot: sl, doses: [] }).doses.push(d); });
     var open = [];
-    fresh.stacks.forEach(function (st) {
-      if (st.kind !== 'dose') return; // a rest/journal day that's already answered stays answered
-      var doses = st.doses.filter(function (d) { return !loggedDoses[freshKeys[st.id + '|' + d.medId + '|' + d.mins]]; });
-      if (!doses.length) return;
-      var id = st.id; while (lockedIds.indexOf(id) >= 0 || open.some(function (o) { return o.id === id; })) id += 'b';
-      open.push(Object.assign({}, st, { id: id, doses: doses, mins: doses[0].mins, boss: doses.some(function (d) { return d.weekly; }) }));
+    Object.keys(groups).forEach(function (k) {
+      var g = groups[k], cl = []; g.doses.sort(function (a, b2) { return a.mins - b2.mins; });
+      g.doses.forEach(function (d) { var c = cl[cl.length - 1]; if (!c || d.mins - c.mins > E.CLUSTER) { c = { mins: d.mins, doses: [] }; cl.push(c); } c.doses.push(d); });
+      cl.forEach(function (c, ci) {
+        var id = g.slot.id + (ci ? '-' + (ci + 1) : ''); while (lockedIds.indexOf(id) >= 0 || open.some(function (o) { return o.id === id; })) id += 'b';
+        open.push({ id: id, group: g.slot.id, label: g.slot.label, mins: c.mins, kind: 'dose', doses: c.doses, boss: c.doses.some(function (d) { return d.weekly; }) });
+      });
     });
     if (!open.length) return false;
     var v = E.allocate(Math.max(0, 100 - used('value')), open.length), s = E.allocate(Math.max(0, 80 - used('stars')), open.length),

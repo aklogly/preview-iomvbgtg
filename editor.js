@@ -175,11 +175,12 @@
   function typeWord(t) { return t === 'habit' ? 'habit' : t === 'vitamin' ? 'vitamin' : 'medicine'; }
   // Onboarding shows the default name in the field (visible, editable) instead of inventing one silently.
   function suggestName(type) { return type === 'habit' ? 'Drink water' : type === 'vitamin' ? 'Vitamin D' : 'My morning medicine'; }
+  function answeredToday(id) { var t = S().today; return !!t && t.plan.stacks.some(function (st) { return (t.entries[st.id] || t.paid[st.id]) && st.doses.some(function (d) { return d.medId === id; }); }); }
   function startsLine() {
     var it = ed.item, s = it.schedule;
     if (E.isAsNeeded(it)) return '';
     if (ed.mode === 'onboarding') return 'Starts today';
-    if (ed.mode === 'edit' && it.id && St.medById(it.id)) return 'Changes start with your next dose. Past days stay as they were';
+    if (ed.mode === 'edit' && it.id && St.medById(it.id)) return answeredToday(it.id) ? 'You’ve already checked in for this today, so changes start tomorrow' : 'Changes start with your next dose. Past days stay as they were';
     if (s.start != null && s.start > today()) return s.start === today() + 1 ? 'Starts tomorrow' : 'Starts ' + E.fmtDate(s.start);
     return St.itemStartsToday(it) ? 'Starts today' : 'Starts tomorrow';
   }
@@ -399,7 +400,7 @@
     U.closeAll();
     root.App.back();
     var nx = r.firstNext;
-    if (wasEdit) U.toast('Saved. Changes start with your next dose.');
+    if (wasEdit) U.toast(r.frozen ? 'Saved. Changes start tomorrow.' : 'Saved. Changes start with your next dose.');
     else if (E.isAsNeeded(r.item)) U.toast('Added. It’s under “As needed” on Today.');
     else U.toast('Added. ' + (r.item.type === 'habit' ? 'First nudge: ' : 'First reminder: ') + (nx ? nx.label.replace(/^Today/, 'today').replace(/^Tomorrow/, 'tomorrow') : 'soon') + '.');
     return mode;
