@@ -2,19 +2,20 @@
 (function (root) {
   'use strict';
   var App = root.App = { ui: { tab: 'today', stack: [] }, screens: {}, acts: {}, afterHooks: {}, clinScreens: {} };
-  var TABS = [['today', 'Today'], ['collection', 'Collection'], ['meds', 'Meds'], ['me', 'Me']];
+  var TABS = [['today', 'Today'], ['collection', 'Collection'], ['meds', 'My list'], ['me', 'Me']];
   var lastKey = null;
 
   App.render = function () {
     var St = root.Store, S = St.S, E = root.Engine, A = root.Art;
     var body = document.body, html = document.documentElement;
     body.setAttribute('data-theme', S.theme);
-    body.classList.toggle('calm', !!S.settings.calm);
-    body.classList.toggle('rm', !!S.settings.reducedMotion);
+    body.classList.toggle('calm', root.UI.calm());
+    body.classList.toggle('rm', root.UI.calm());
     html.classList.remove('ts-large', 'ts-xl');
     if (S.settings.textSize === 'large') html.classList.add('ts-large');
     if (S.settings.textSize === 'xl') html.classList.add('ts-xl');
     var sbt = document.getElementById('sbTime'); if (sbt) sbt.textContent = S.today ? E.fmtTime(S.clock).replace(/ (AM|PM)/, '') : '9:41';
+    App.demoChip();
     var view = document.getElementById('view'), tabbar = document.getElementById('tabbar');
     if (root.Onboarding.active || !S.onboarded) {
       view.innerHTML = ''; tabbar.classList.add('hidden');
@@ -35,7 +36,7 @@
     lastKey = key;
     view.style.background = App.clinScreens[name] ? 'var(--clin-bg)' : '';
     tabbar.classList.remove('hidden');
-    var active = top && App.clinScreens[name] ? 'meds' : top && (name === 'privacy' || name === 'crew') ? 'me' : App.ui.tab;
+    var active = top && App.clinScreens[name] ? 'meds' : top && (name === 'privacy' || name === 'crew') ? 'me' : top && (name === 'leaderboard' || name === 'draw') ? 'today' : App.ui.tab;
     tabbar.innerHTML = TABS.map(function (t) {
       var dot = t[0] === 'collection' && S.chests.some(function (c) { return !c.opened; }) ? '<span class="tab-dot" aria-hidden="true"></span>' : '';
       return '<button class="tab ' + (active === t[0] ? 'active' : '') + '" data-act="tab" data-t="' + t[0] + '" aria-current="' + (active === t[0] ? 'page' : 'false') + '">' + A.icon(t[0]) + dot + '<span>' + t[1] + '</span></button>';
@@ -44,7 +45,6 @@
     root.UI.placeBanner(false); // keep a live banner in place across re-renders
   };
   App.go = function (name, params) {
-    if (name === 'medWizard' && !(params && params.id) && root.MedsUI) root.MedsUI.resetWizard();
     App.ui.stack.push({ name: name, params: params || {} }); App.render(); document.getElementById('view').scrollTop = 0;
     try { history.pushState({ depth: App.ui.stack.length }, ''); } catch (e) { }
   };
@@ -62,7 +62,7 @@
   App.fitFrame = fitFrame;
 
   Object.assign(App.acts, {
-    tab: function (el) { root.UI.closeAll(); App.setTab(el.getAttribute('data-t')); root.UI.sfx('tap'); },
+    tab: function (el) { root.UI.closeAll(); if (root.TodayUI) root.TodayUI.ui.early = null; App.setTab(el.getAttribute('data-t')); root.UI.sfx('tap'); },
     back: function () { App.back(); },
     go: function (el) { root.UI.closeAll(); var p = {}; if (el.getAttribute('data-id')) p.id = el.getAttribute('data-id'); App.go(el.getAttribute('data-to'), p); },
     'sheet-close': function () { root.UI.closeOverlay(); }
@@ -77,13 +77,42 @@
     if (e.key === 'Escape') { var t = root.UI.topOverlay(); if (t) root.UI.closeOverlay(t); }
   });
 
+  /* "Demo time · Back to live": shown while the demo save is active. Tapping it discards nothing live. */
+  App.demoChip = function () {
+    var St = root.Store, el = document.getElementById('demoLive'), on = St.S.clockMode === 'demo' && !St.pinned();
+    if (!el) { el = document.createElement('button'); el.id = 'demoLive'; el.type = 'button'; el.setAttribute('data-act', 'back-to-live'); el.textContent = 'Demo time · Back to live'; el.setAttribute('aria-label', 'Demo time is on. Back to live'); document.body.appendChild(el); }
+    el.hidden = !on;
+  };
+  // Live mode: catch up on open, on focus / visibility change and once a minute. Re-render only when something moved.
+  App.sync = function (force) {
+    var St = root.Store; if (!St.isLive()) return false;
+    var r = St.liveSync();
+    if ((r.changed || force) && !document.querySelector('.run-screen, .game-screen')) {
+      if (r.rolled) { root.UI.closeAll(); App.ui.stack = []; App.ui.tab = 'today'; }
+      App.render();
+    }
+    return r.changed;
+  };
   App.boot = function () {
     var St = root.Store;
-    if (!St.load()) { St.reset(); }
-    else if (St.S.onboarded) { root.Onboarding.state().active = false; }
+    St.load();
     if (St.S.onboarded) root.Onboarding.state().active = false;
+    if (St.S.onboarded) St.liveSync();
     fitFrame();
     App.render();
     document.getElementById('demoChevron').addEventListener('click', function () { root.Demo.open(); });
+    if (!App._ticking) {
+      App._ticking = setInterval(function () { App.sync(false); }, 60000);
+      document.addEventListener('visibilitychange', function () { if (!document.hidden) App.sync(false); });
+      window.addEventListener('focus', function () { App.sync(false); });
+    }
   };
+  App.acts['back-to-live'] = function () {
+    var St = root.Store; root.UI.closeAll(); if (root.Extra) root.Extra.closeRun();
+    var r = St.backToLive();
+    root.Onboarding.reset(); if (St.S.onboarded) root.Onboarding.state().active = false;
+    App.ui.stack = []; App.ui.tab = 'today'; App.render();
+    root.UI.toast(r.fresh ? 'Live mode. Set up your real list to start.' : 'Back to live. It’s ' + E().fmtDate(St.S.day) + ', ' + E().fmtTime(St.S.clock) + '.');
+  };
+  function E() { return root.Engine; }
 })(window);

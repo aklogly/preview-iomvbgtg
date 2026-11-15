@@ -1,5 +1,5 @@
 /* Kindling v5.3 — screens-camp.js : the Campfire (Expedition) / Garden days (Grove) daily-visit count, feeding, growth, rest mode.
- * Lit by one play action a day (Daily Run or Feed). Doses never light it, break it or appear in its copy.
+ * Lit by one play action a day (any daily game, or Feed). Doses never light it, break it or appear in its copy.
  * No red, no sad companion, no "lost". Kid profiles never see it. */
 (function (root) {
   'use strict';
@@ -24,18 +24,18 @@
     if (!on()) return '';
     var c = camp(), t = cm(), state = resting() ? 'rest' : lit() ? 'lit' : 'unlit';
     var label = resting() ? t.name + ' ' + t.is + ' resting' : c.count ? t.dayLabel(c.count) + (lit() ? '. ' + t.lit + '.' : '. Not counted yet today.') : t.start;
-    return '<button class="camp-chip ' + state + '" data-act="camp-sheet" aria-label="' + esc(label) + '"><span class="cc-ic" aria-hidden="true">' + t.icon + '</span>' + (c.count ? '<b>' + c.count + '</b>' : '') + '</button>';
+    return '<button class="camp-chip ' + state + '" data-act="camp-sheet" aria-label="' + esc(label) + '"><span class="cc-ic" aria-hidden="true">' + t.icon + '</span>' + '<b>' + c.count + '</b>' + '</button>';
   }
 
   /* ---------- relight progress ---------- */
   function relightHtml() {
     var off = E.relightOffer(camp(), S().day); if (!off) return '';
-    var t = S().today, t1 = !!t.run, t2 = t.relightPractice > 0 && t1, tm = th(), c = cm();
+    var t = S().today, t1 = !!(t.run || t.gameDone), t2 = t.relightPractice > 0 && t1, tm = th(), c = cm();
     return '<div class="relight"><div class="rl-h">' + esc(c.relightLabel(off.prev)) + '</div>' +
-      '<div class="rl-step ' + (t1 ? 'done' : '') + '"><span>' + (t1 ? '✓' : '○') + '</span>Finish today’s ' + esc(tm.terms.run) + '</div>' +
+      '<div class="rl-step ' + (t1 ? 'done' : '') + '"><span>' + (t1 ? '✓' : '○') + '</span>Finish one of today’s games</div>' +
       '<div class="rl-step ' + (t2 ? 'done' : '') + '"><span>' + (t2 ? '✓' : '○') + '</span>Play 1 practice board' + (t1 ? '' : ' after that') + '</div>' +
       '<div class="rl-sub">Free. Open until ' + esc(E.fmtDate(off.until)) + '.</div>' +
-      (t1 && !t2 ? '<button class="btn btn-tile" data-act="run-practice">Practice board</button>' : '') + '</div>';
+      (t1 && !t2 ? '<button class="btn btn-tile" data-act="game-intro" data-g="trail" data-practice="1">Practice board</button>' : '') + '</div>';
   }
   function noteLine() {
     var n = S().flags.campNote, c = cm();
@@ -54,9 +54,9 @@
     var c = camp(), t = cm(), title, body;
     if (resting()) { title = t.icon + ' Resting until ' + E.fmtDate(c.rest.until); body = 'Your ' + t.name + ' ' + t.is + ' paused. Nothing to do. Play anytime if you like.'; }
     else if (lit()) { title = 'Day ' + c.count + ' ' + t.icon; body = t.lit + '. See you tomorrow.'; }
-    else if (c.count) { title = 'Day ' + c.count + ' ' + t.icon; body = 'Feed ' + she() + ' or play the Daily Run to ' + t.today + '.'; }
-    else if (c.best) { title = t.ready; body = 'Best ever: ' + days(c.best) + '. Feed ' + she() + ' or play to start.'; }
-    else { title = t.start; body = 'Feed ' + she() + ' or play the Daily Run once a day. It grows each day you visit.'; }
+    else if (c.count) { title = 'Day ' + c.count + ' ' + t.icon; body = 'Feed ' + she() + ' or play any daily game to ' + t.today + '.'; }
+    else if (c.best) { title = t.ready; body = 'Best ever: ' + days(c.best) + '. Finish any daily game or feed ' + she() + ' to start.'; }
+    else { title = t.start; body = 'Feed ' + she() + ' or play any daily game once a day. It grows each day you visit.'; }
     var g = St.growth(), nx = E.nextMilestone(c);
     var meta = '<div class="camp-meta"><span>' + esc(she()) + ' · ' + esc(stageName(g.stage)) + (g.next ? ' · ' + days(g.next.daysLeft) + ' to ' + esc(stageName(g.next.stage)) : '') + '</span>' +
       (nx && !resting() ? '<span>Next: day ' + nx.n + ' · ' + esc(E.CHESTS[nx.chest].label) + ' ' + esc(th().terms.chest.toLowerCase()) + '</span>' : '') + '</div>';
@@ -83,16 +83,16 @@
     var msList = E.milestonesUpTo(Math.max(1000, c.count + 365));
     var ms = msList.map(function (m) { var r = E.milestoneReward(m), got = !!c.paid[m]; return '<span class="ms ' + (got ? 'got' : '') + ' ms-' + r.chest + '" title="Day ' + m + '">' + (got ? '✓ ' : '') + m + '</span>'; }).join('');
     var head = resting() ? 'Resting until ' + E.fmtDate(c.rest.until) : c.count ? 'Day ' + c.count : c.best ? 'Ready to ' + t.light + ' again' : 'Not started yet';
-    var body = '<div class="camp-hero ' + (lit() ? 'is-lit' : '') + '"><div class="ch-flame" aria-hidden="true">' + t.icon + '</div><div><div class="ch-count">' + esc(head) + '</div><div class="ch-sub">' + esc(resting() ? 'Paused. Pausing never resets it.' : lit() ? t.lit + '.' : 'Feed ' + she() + ' or play the ' + tm.terms.run + ' to ' + t.light + ' today.') + '</div></div></div>' +
+    var body = '<div class="camp-hero ' + (lit() ? 'is-lit' : '') + '"><div class="ch-flame" aria-hidden="true">' + t.icon + '</div><div><div class="ch-count">' + esc(head) + '</div><div class="ch-sub">' + esc(resting() ? 'Paused. Pausing never resets it.' : lit() ? t.lit + '.' : 'Finish any daily game or feed ' + she() + ' to ' + t.light + ' today.') + '</div></div></div>' +
       '<div class="camp-stats"><div><b>' + c.best + '</b><span>Best ever</span></div><div><b>' + c.total + '</b><span>Total days played</span></div><div><b class="sh-row">' + shields + '</b><span>' + esc(t.shields) + '</span></div></div>' +
       relightHtml() +
       '<div class="camp-sec"><h3>Milestones</h3>' + (nx ? '<p>Next: day ' + nx.n + ' · ' + esc(E.CHESTS[nx.chest].label) + ' ' + esc(tm.terms.chest.toLowerCase()) + (nx.cosmetic ? ' + ' + esc(t.cosmetics[nx.cosmetic]) : '') + '</p>' : '<p>Every milestone earned. Wow.</p>') + '<div class="ms-row">' + ms + '</div><p class="muted sm">Each milestone pays once, then one every 365 days after day 1000. Day 365, 730 and 1000 each add a one-of-a-kind look for ' + esc(she()) + ': ' + esc(t.cosmetics.m365) + ', ' + esc(t.cosmetics.m730) + ', ' + esc(t.cosmetics.m1000) + '.</p></div>' +
       '<div class="camp-sec growth"><div class="gr-art">' + A.companion(compDef(), 'happy', { aura: aura() }) + '</div><div><h3>' + esc(she()) + ' is ' + esc(aName(stageName(g.stage))) + '</h3><p>' + (g.next ? days(g.next.daysLeft) + ' of play to ' + esc(stageName(g.next.stage)) + '.' : 'Fully grown. ') + ' Growth counts every day you play, in a row or not, so it never goes backwards.</p></div></div>' +
       '<div class="camp-sec"><h3>How it works</h3><ul class="camp-how">' +
-        '<li>' + esc(t.light.charAt(0).toUpperCase() + t.light.slice(1)) + ' it once a day: feed ' + esc(she()) + ' or finish the ' + esc(tm.terms.run) + '.</li>' +
+        '<li>' + esc(t.light.charAt(0).toUpperCase() + t.light.slice(1)) + ' it once a day: feed ' + esc(she()) + ' or finish any daily game.</li>' +
         '<li>Medicines never count toward it, and never count against it.</li>' +
         '<li>' + esc(t.shields) + ': earn 1 for every 7 days you play, hold up to 2. If a day goes by, one is used for you.</li>' +
-        '<li>No ' + esc(t.shield.toLowerCase()) + '? ' + esc(t.relight) + ' it within 2 days: finish that day’s ' + esc(tm.terms.run) + ' plus 1 practice board. Free.</li>' +
+        '<li>No ' + esc(t.shield.toLowerCase()) + '? ' + esc(t.relight) + ' it within 2 days: finish one of that day’s games plus 1 practice board. Free.</li>' +
         '<li>Need a break? Pause it in Me for 1 to 14 days.</li>' +
         '<li>It never changes Grand Draw tickets or ' + esc(tm.terms.charge) + '. Nothing here is for sale.</li></ul></div>';
     U.sheet('Your ' + t.name, body, { sub: esc(E.fmtDateLong(s.day)) });
@@ -180,17 +180,21 @@
       return;
     }
     U.sheet('Taking a break', '<p style="font-weight:700">Sick, in the hospital, or traveling? Pause your ' + esc(t.name) + '. Pausing never resets it.</p>' +
-      '<div class="set-row" style="margin-top:12px"><span class="sr-main"><span class="sr-t" style="display:block">How many days?</span><span class="sr-s" id="restUntil">Paused through ' + esc(E.fmtDate(s.day + restDays - 1)) + '</span></span><span class="num-stepper"><button data-act="camp-rest-d" data-d="-1" aria-label="Fewer days">−</button><b id="restDaysN">' + restDays + '</b><button data-act="camp-rest-d" data-d="1" aria-label="More days">+</button></span></div>' +
+      '<div class="set-row" style="margin-top:12px"><span class="sr-main"><span class="sr-t" style="display:block">How many days?</span><span class="sr-s" id="restUntil">Paused through ' + esc(E.fmtDate(s.day + restDays - 1)) + '</span></span><button type="button" class="tok" data-act="camp-rest-wheel" aria-label="How many days: ' + restDays + '. Change">' + restDays + ' day' + (restDays === 1 ? '' : 's') + ' <span class="tok-v" aria-hidden="true">▾</span></button></div>' +
       '<p class="muted sm" style="margin-top:8px">1 to 14 days, once every 30 days. Medicine reminders keep going as usual.</p>' +
       '<button class="btn btn-dark btn-block" style="margin-top:14px" data-act="camp-rest-go">Start my break</button>');
   }
 
-  root.CampUI = { chip: chip, tile: tile, simpleLine: simpleLine, sheet: sheet, after: after, aura: aura, restRow: restRow, stageUp: stageUp };
+  root.CampUI = { relightHtml: relightHtml, noteLine: noteLine, chip: chip, tile: tile, simpleLine: simpleLine, sheet: sheet, after: after, aura: aura, restRow: restRow, stageUp: stageUp };
   Object.assign(root.App.acts, {
     'camp-sheet': function () { U.closeAll(); sheet(); },
     'camp-feed': onFeed,
     'camp-ms-open': function (el) { pendingChest = el.getAttribute('data-c') || null; U.closeOverlay(); },
     'camp-rest': function () { restSheet(); },
+    'camp-rest-wheel': function () {
+      U.closeAll();
+      root.Wheel.sheet({ title: 'How many days?', cols: [root.Wheel.numCol(1, 14, restDays, 'Days', 'days')], preview: function (v) { return 'Paused through ' + esc(E.fmtDate(S().day + v[0] - 1)); }, onDone: function (v) { restDays = v[0]; setTimeout(restSheet, 60); } });
+    },
     'camp-rest-d': function (el) {
       restDays = Math.max(E.CAMP.restMin, Math.min(E.CAMP.restMax, restDays + +el.getAttribute('data-d')));
       var n = document.getElementById('restDaysN'), u = document.getElementById('restUntil');

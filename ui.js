@@ -8,7 +8,8 @@
   function overlayRoot() { return document.getElementById('overlay-root'); }
   function settings() { return root.Store.S.settings; }
   function osReduce() { try { return !!(root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches); } catch (e) { return false; } }
-  function calm() { var s = settings(); return s.calm || s.reducedMotion || osReduce(); }
+  // v5.5: Calm mode is gone. "Big celebrations" off (or the phone's Reduce Motion) takes the quiet path.
+  function calm() { var s = settings(); return s.celebrations === false || !!s.reducedMotion || osReduce(); }
 
   /* ---------- sound (synthesized, no files) ---------- */
   var ctx = null;
@@ -31,7 +32,7 @@
     soft: function () { tone(440, 0, .15, 'sine', .05); },
     pu: function () { [440, 554, 659, 880].forEach(function (f, i) { tone(f, i * .07, .3, 'square', .045); }); }
   };
-  function sfx(name) { var s = settings(); if (!s.sound || s.calm) return; try { SFX[name] && SFX[name](); } catch (e) { } }
+  function sfx(name) { var s = settings(); if (!s.sound) return; try { SFX[name] && SFX[name](); } catch (e) { } }
   function haptic(p) { var s = settings(); if (!s.haptics) return; try { if (navigator.vibrate) navigator.vibrate(p || 10); } catch (e) { } }
 
   /* ---------- live region ---------- */

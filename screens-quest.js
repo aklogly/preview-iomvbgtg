@@ -43,9 +43,9 @@
   function tile() {
     var s = S(), tr = s.trip, tm = th();
     if (tr.status === 'back' && tr.quest) {
-      return '<section class="tile trip quest-tile" aria-label="' + esc(tm.terms.trip) + '"><div class="deco">📮</div>' +
+      return '<section class="tile trip quest-tile tap" data-act="trip-open" aria-label="' + esc(tm.terms.trip) + '"><div class="deco">📮</div>' +
         '<div class="t-kicker">' + esc(tm.terms.trip) + ' · back this morning</div><div class="t-title">' + esc(nm()) + ' is back from ' + esc(qName(tr.quest)) + '</div>' +
-        '<div class="t-body">Three beats to see, a haul to unpack, and a new page.</div>' +
+        '<div class="t-body">Three beats to see, a haul to unpack, and a new page.' + (tr.auto ? ' ' + esc(nm()) + ' picked ' + esc(qName(tr.quest)) + ' on their own. Pick tonight’s anytime.' : '') + '</div>' +
         '<div class="t-row"><button class="btn btn-tile" data-act="trip-open" data-autofocus>📬 See how it went</button></div></section>';
     }
     if (tr.status === 'back') { // a pre-v5.4 Trip still waiting
@@ -54,10 +54,12 @@
     if (tr.status === 'out') {
       var q = tr.quest || St.questForDest(tr.dest) || 'q1';
       var p = R.predict(q, tr.comp || cs(), tr.loadout || St.readyLoadout(q), tr.tier != null ? tr.tier : St.regionTier());
-      return '<section class="tile trip quest-tile" aria-label="' + esc(tm.terms.trip) + '"><div class="deco">' + ST().quests[q].icon + '</div>' +
-        '<div class="t-kicker">' + esc(tm.terms.trip) + ' · tonight</div><div class="t-title">' + esc(nm()) + ' is off to ' + esc(qName(q)) + '</div>' +
-        '<div class="beat-row">' + p.map(function (r, i) { return beatChip(r, q, i); }).join('') + '</div>' +
-        '<div class="t-body">' + gearIcons(tr.loadout) + (tr.packed ? ' · packed a ' + esc(tm.powerUps[tr.packed.type].name) : '') + ' · back tomorrow morning.</div></section>';
+      var gone = St.tripOvernight();
+      // The whole card opens "where, gear, when back" (it has no other button). Beat chips are flat here, not buttons.
+      return '<section class="tile trip quest-tile tap" role="button" tabindex="0" data-act="quest-out" aria-label="' + esc(nm()) + (gone ? ' is out on ' : ' leaves tonight for ') + esc(qName(q)) + '. Back around 6:00 AM"><div class="deco">' + ST().quests[q].icon + '</div>' +
+        '<div class="t-kicker">' + esc(tm.terms.trip) + (gone ? ' · out tonight' : ' · tonight') + '</div><div class="t-title">' + (gone ? esc(nm()) + ' is out on ' + esc(qName(q)) : 'Tonight: ' + esc(qName(q))) + '</div>' +
+        '<div class="beat-row flat">' + p.map(function (r, i) { return beatChip(r, q, i); }).join('') + '</div>' +
+        '<div class="t-body">' + gearIcons(tr.loadout) + (tr.packed ? ' · packed a ' + esc(tm.powerUps[tr.packed.type].name) : '') + (gone ? ' · back around 6:00 AM.' : ' · leaves 9:00 PM · back around 6:00 AM.') + '</div></section>';
     }
     if (s.settings.simple) {
       var rq = recommended();
@@ -65,9 +67,10 @@
         '<div class="t-body">' + esc(nm()) + ' gets ready and comes back in the morning with a story.</div>' +
         '<div class="t-row"><button class="btn btn-tile" data-act="qs-send" data-q="' + rq + '">🧭 Send ' + esc(nm()) + '</button><button class="btn btn-tile-2" data-act="trip-send">Other places</button></div></section>';
     }
-    return '<section class="tile trip quest-tile" aria-label="' + esc(tm.terms.trip) + '"><div class="deco">🧭</div>' +
+    var rec = St.recommendedQuest();
+    return '<section class="tile trip quest-tile tap" data-act="trip-send" aria-label="' + esc(tm.terms.trip) + '"><div class="deco">🧭</div>' +
       '<div class="t-kicker">' + esc(tm.terms.trip) + '</div><div class="t-title">Where should ' + esc(nm()) + ' go tonight?</div>' +
-      '<div class="t-body">Pick a ' + esc(tm.terms.trip.toLowerCase()) + '. Gear and skills decide how it goes. It never fails.</div>' +
+      '<div class="t-body">Pick a ' + esc(tm.terms.trip.toLowerCase()) + '. Gear and skills decide how it goes. It never fails. If you don’t pick, ' + esc(nm()) + ' will choose ' + esc(qName(rec)) + ' at 9:00 PM.</div>' +
       '<div class="t-row"><button class="btn btn-tile" data-act="trip-send">🧭 Pick a ' + esc(tm.terms.trip.toLowerCase()) + '</button><button class="btn btn-tile-2" data-act="go" data-to="companion">' + esc(nm()) + '’s gear</button></div></section>';
   }
   function recommended() { var best = 'q1', bs = -1; R.QUESTS.forEach(function (q) { var sc = R.score(R.predict(q, cs(), St.readyLoadout(q.id), St.regionTier())); if (sc > bs) { bs = sc; best = q.id; } }); return best; }
@@ -120,7 +123,7 @@
     var r = St.sendQuest(q, lo, ui.pack); if (!r) return;
     var packed = ui.pack; ui.pack = null;
     U.closeAll(); root.App.render(); U.sfx('reveal');
-    U.toast(esc(nm()) + ' heads off to ' + esc(qName(q)) + ' tonight' + (packed ? ' with a ' + esc(th().powerUps[packed].name) + ' packed' : '') + '. Back in the morning.');
+    U.toast(esc(nm()) + ' leaves for ' + esc(qName(q)) + ' at 9:00 PM' + (packed ? ' with a ' + esc(th().powerUps[packed].name) + ' packed' : '') + '. Back around 6:00 AM.');
   }
 
   /* ---------- the morning return: beats first, then the haul, then a page turn ---------- */
@@ -295,7 +298,16 @@
   root.QuestUI = { tile: tile, board: board, openReturn: openReturn, unpack: unpack, twoBuilds: twoBuilds, chooseScreen: chooseScreen, impactText: impactText, gearSheet: gearSheet, recommended: recommended };
   root.App.screens.companion = companionScreen;
   root.App.screens.tree = treeScreen;
+  function outSheet() {
+    var s = S(), tr = s.trip, q = tr.quest || St.questForDest(tr.dest) || 'q1', gone = St.tripOvernight();
+    var p = R.predict(q, tr.comp || cs(), tr.loadout || St.readyLoadout(q), tr.tier != null ? tr.tier : St.regionTier());
+    U.sheet(nm() + '’s ' + th().terms.trip.toLowerCase(), '<p style="font-weight:800">' + esc(qName(q)) + '</p><div class="beat-row flat">' + p.map(function (r, i) { return beatChip(r, q, i); }).join('') + '</div>' +
+      '<div class="fact"><span class="f-ic" style="background:var(--neutral-bg)">🎒</span><div><div class="f-t">Gear</div><div class="f-s">' + gearIcons(tr.loadout) + (tr.packed ? ' · packed a ' + esc(th().powerUps[tr.packed.type].name) : '') + '</div></div></div>' +
+      '<div class="fact"><span class="f-ic" style="background:var(--neutral-bg)">🌙</span><div><div class="f-t">' + (gone ? 'Out now' : 'Leaves at 9:00 PM') + '</div><div class="f-s">Back around 6:00 AM, with a story and a haul.</div></div></div>' +
+      '<p class="muted" style="font-weight:600;font-size:.88rem">Gear and skills decide how it goes. It never fails.</p>');
+  }
   Object.assign(root.App.acts, {
+    'quest-out': function () { outSheet(); },
     'trip-send': function () { board(); },
     'trip-go': function (el) { send(St.questForDest(el.getAttribute('data-d')) || 'q1'); },
     'trip-open': openReturn, 'trip-unpack': unpack, 'qr-page': turnPage,

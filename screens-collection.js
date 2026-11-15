@@ -46,13 +46,13 @@
     var w = pend + waiting.map(function (c) { return '<div class="list-row"><div class="chest-mini">' + A.chest(c.type) + '</div><div class="grow"><div style="font-weight:900">' + E.CHESTS[c.type].label + ' ' + esc(tm.terms.chest) + '</div><div class="muted" style="font-size:.85rem;font-weight:700">' + srcLabel(c.source) + '</div></div><button class="btn btn-dark" data-act="chest-open" data-c="' + c.id + '">Open</button></div>'; }).join('');
     var h = hist.map(function (c) {
       var r = c.result || { finds: [] };
-      return '<div class="list-row"><div class="chest-mini" style="width:44px;height:40px;flex-basis:44px">' + A.chest(c.type) + '</div><div class="grow"><div style="font-weight:800">' + E.CHESTS[c.type].label + ' · ' + srcLabel(c.source) + '</div><div style="font-size:1.2rem">' + r.finds.map(function (f) { return '<span class="find-mini">' + Th.findArt(tm, f.id).icon + '</span>'; }).join(' ') + '</div></div><span class="muted" style="font-weight:800;font-size:.85rem">' + E.fmtDate(c.openedDay || c.day) + '</span></div>';
+      return '<button type="button" class="list-row list-btn" data-act="chest-past" data-c="' + c.id + '"><div class="chest-mini" style="width:44px;height:40px;flex-basis:44px">' + A.chest(c.type) + '</div><div class="grow"><div style="font-weight:800">' + E.CHESTS[c.type].label + ' · ' + srcLabel(c.source) + '</div><div style="font-size:1.2rem">' + r.finds.map(function (f) { return '<span class="find-mini">' + Th.findArt(tm, f.id).icon + '</span>'; }).join(' ') + '</div></div><span class="muted" style="font-weight:800;font-size:.85rem">' + E.fmtDate(c.openedDay || c.day) + '</span></button>';
     }).join('');
-    return (w ? '<div class="card"><h3>Ready to open</h3>' + w + '</div>' : '<div class="card"><h3>No ' + esc(tm.terms.chest.toLowerCase()) + 's waiting</h3><p>Today’s ' + esc(tm.terms.run) + ' and quests bring more. Nothing here ever expires.</p></div>') +
+    return (w ? '<div class="card"><h3>Ready to open</h3>' + w + '</div>' : '<div class="card"><h3>No ' + esc(tm.terms.chest.toLowerCase()) + 's waiting</h3><p>Today’s games and goals bring more. Nothing here ever expires.</p></div>') +
       '<div class="card"><div class="row"><div class="grow"><h3>Rare guarantee</h3><p>A rare or better is guaranteed within the next <b>' + pityLeft + '</b> ' + esc(tm.terms.chest.toLowerCase()) + (pityLeft === 1 ? '' : 's') + '.</p></div><button class="btn btn-soft" data-act="odds" aria-label="Chest odds">' + A.icon('info') + ' Odds</button></div></div>' +
       '<div class="card"><h3>History</h3>' + (h || '<p>Your opened ' + esc(tm.terms.chest.toLowerCase()) + 's will show here.</p>') + '</div>';
   }
-  function srcLabel(src) { var tm = th(); return { run: 'From today’s ' + tm.terms.run, first: 'Your first ' + tm.terms.chest.toLowerCase(), welcome: 'Welcome-back gift', boss: 'Boss Day', draw: 'Draw night', quest: 'Quest' }[src] || (/^campfire-(\d+)/.test(src || '') ? tm.camp.dayLabel(+/^campfire-(\d+)/.exec(src)[1]) : 'Reward'); }
+  function srcLabel(src) { var tm = th(); return { run: 'From today’s ' + tm.terms.run, game: 'From today’s games', first: 'Your first ' + tm.terms.chest.toLowerCase(), welcome: 'Welcome-back gift', boss: 'Boss Day', draw: 'Draw night', quest: 'Quest' }[src] || (/^campfire-(\d+)/.test(src || '') ? tm.camp.dayLabel(+/^campfire-(\d+)/.exec(src)[1]) : 'Reward'); }
 
   function render() {
     var tm = th();
@@ -137,6 +137,11 @@
     place: function (el) { var d = el.getAttribute('data-d'), i = el.getAttribute('data-i'); if (d) { var r = St.placeDecor(i, d); U.closeAll(); root.App.render(); var sl = document.querySelector('.slot[data-i="' + i + '"]'); U.burstAt(sl, { n: 18, spread: 70 }); U.sfx('reveal'); if (r.quest) U.toast('Quest done: ' + esc(Th.fill(r.quest.text, th())) + ' +' + r.quest.reward.stars + ' ★'); } else { delete S().placed[i]; St.save(); U.closeAll(); root.App.render(); } },
     buy: function (el) { if (St.buyDecor(el.getAttribute('data-d'), +el.getAttribute('data-c'))) { root.App.render(); U.toast('It’s yours. Tap a spot to place it.'); U.sfx('reveal'); } },
     'chest-open': function (el) { chestFx(el.getAttribute('data-c')); },
+    'chest-past': function (el) {
+      var tm = th(), c = S().chests.filter(function (x) { return x.id === el.getAttribute('data-c'); })[0]; if (!c) return;
+      var r = c.result || { finds: [] };
+      U.sheet(E.CHESTS[c.type].label + ' ' + tm.terms.chest, '<p class="muted" style="font-weight:700">' + esc(srcLabel(c.source)) + ' · opened ' + esc(E.fmtDate(c.openedDay || c.day)) + '</p><div class="opt-list">' + r.finds.map(function (f) { var a = Th.findArt(tm, f.id); return '<button class="opt" data-act="find" data-f="' + f.id + '"><span style="font-size:1.6rem">' + a.icon + '</span><span><span class="o-t" style="display:block">' + esc(a.name) + '</span><span class="o-s">' + f.rarity + (f.dup ? ' · duplicate' : '') + '</span></span></button>'; }).join('') + '</div>' + (r.stars ? '<p style="font-weight:800;margin-top:10px">+' + r.stars + ' ★</p>' : ''));
+    },
     'chest-tap': chestTap,
     odds: function () { U.sheet('Chest odds', oddsHtml(), { sub: 'Plain and simple. Same for everyone.' }); }
   });

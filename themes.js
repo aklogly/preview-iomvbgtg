@@ -7,7 +7,7 @@
   var THEMES = {
     expedition: {
       id: 'expedition', name: 'Expedition', blurb: 'Bright trails, big finds, a buddy who can’t sit still.',
-      terms: { charge: 'Spark', core: 'Beacon', piece: 'piece', run: 'Daily Run', trip: 'Quest', trips: 'Quests', finds: 'Specimens', find: 'Specimen', home: 'Camp', album: 'Field Guide', chest: 'Chest' },
+      terms: { charge: 'Spark', core: 'Beacon', piece: 'piece', run: 'Trail', trip: 'Quest', trips: 'Quests', finds: 'Specimens', find: 'Specimen', home: 'Camp', album: 'Field Guide', chest: 'Chest' },
       // v5.3 Campfire (daily-visit count). Shields are "Spare logs". Growth stages come from total days played.
       camp: { name: 'Campfire', is: 'is', start: 'Start a Campfire', ready: 'Your Campfire’s ready to light again', counts: 'The Campfire counts', icon: '🔥', shield: 'Spare log', shields: 'Spare logs', shieldIcon: '🪵', treatIcon: '🍖', lit: 'Today’s fire is lit', light: 'light', today: 'light today’s fire', relight: 'Relight',
         dayLabel: function (n) { return 'Campfire: day ' + n; }, relightLabel: function (n) { return 'Relight your ' + n + '-day Campfire'; },
@@ -61,7 +61,7 @@
     },
     grove: {
       id: 'grove', name: 'Grove', blurb: 'A quiet garden that blooms as your day comes together.',
-      terms: { charge: 'Sunlight', core: 'Bloom', piece: 'petal', run: 'Daily Run', trip: 'Wander', trips: 'Wanders', finds: 'Seeds & Blooms', find: 'Bloom', home: 'Cottage', album: 'Garden Book', chest: 'Basket' },
+      terms: { charge: 'Sunlight', core: 'Bloom', piece: 'petal', run: 'Garden Path', trip: 'Wander', trips: 'Wanders', finds: 'Seeds & Blooms', find: 'Bloom', home: 'Cottage', album: 'Garden Book', chest: 'Basket' },
       // v5.4: the count is "Garden days" (Bloom is the name of the Finds, Seeds & Blooms).
       camp: { name: 'Garden days', is: 'are', start: 'Start your Garden days', ready: 'Your Garden days are ready to start again', counts: 'Garden days count', icon: '🌸', shield: 'Dewdrop', shields: 'Dewdrops', shieldIcon: '💧', treatIcon: '🍯', lit: 'Today counts as a garden day', light: 'count', today: 'count today', relight: 'Regrow',
         dayLabel: function (n) { return n + ' Garden day' + (n === 1 ? '' : 's'); }, relightLabel: function (n) { return 'Regrow your ' + n + ' Garden days'; },
@@ -70,7 +70,7 @@
         cosmetics: { m365: 'Flower Crown', m730: 'Moonpetal Shawl', m1000: 'Golden Laurel' },
         fed: ['Oh, lovely. Thank you.', 'Honey! My favorite.', 'That was just right. Thank you.'], reminder: '{name} saved you a treat 🌸' },
       companions: [
-        // v5.4 garden spirits (Logan, 2026-11-09). Same engine; each kind has its own look, growth and voice.
+        // v5.4 garden spirits. Same engine; each kind has its own look, growth and voice.
         { id: 'fairy', kind: 'fairy', species: 'Fairy', vibe: 'Quick', defaultName: 'Clover', body: '#f6c6d8', belly: '#fff1f6', accent: '#b9a4f2', ears: 'fairy', pron: ['she', 'her', 'her'], paw: 'hand', sound: 'hum', sounding: 'humming' },
         { id: 'gnome', kind: 'gnome', species: 'Gnome', vibe: 'Steady', defaultName: 'Bramble', body: '#e9c3a0', belly: '#fff3e6', accent: '#e07a5f', ears: 'gnome', pron: ['he', 'him', 'his'], paw: 'hand', sound: 'grunt', sounding: 'grumbling' },
         { id: 'sprite', kind: 'sprite', species: 'Leaf sprite', vibe: 'Gentle', defaultName: 'Fern', body: '#9fd18b', belly: '#eefbe6', accent: '#f4a7a0', ears: 'sprite', pron: ['they', 'them', 'their'], paw: 'hand', sound: 'hum', sounding: 'humming' },

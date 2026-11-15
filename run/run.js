@@ -580,7 +580,29 @@
       empty: 'Path'
     }
   };
-  var DIFF_LABEL = { stroll: 'Stroll', trek: 'Trek', summit: 'Summit', practice: 'Practice' };
+  // v5.5: plain labels everywhere. stroll/trek/summit stay as internal config (and seed) names.
+  var DIFF_LABEL = { stroll: 'Easy', trek: 'Normal', summit: 'Hard', practice: 'Practice' };
+  var DIFF_ALIAS = { easy: 'stroll', normal: 'trek', hard: 'summit' };
+  var DIFF_PLAIN = { stroll: 'easy', trek: 'normal', summit: 'hard', practice: 'practice' };
+  var GAME_TITLE = { expedition: 'The Trail', grove: 'Garden Path' };
+
+  // Count-up clock (no countdowns). 'free' pauses (power-up picking) exclude time without counting as a pause.
+  function Clock() { this.started = false; this.stopped = false; this.run = 0; this.paused = 0; this.last = 0; this.reasons = {}; }
+  Clock.prototype.now = function () { return (global.performance && performance.now) ? performance.now() : Date.now(); };
+  Clock.prototype._tick = function () {
+    if (!this.started || this.stopped) return;
+    var t = this.now(), dt = t - this.last, any = false, counts = false; this.last = t;
+    for (var k in this.reasons) { any = true; if (k !== 'free') counts = true; }
+    if (!any) this.run += dt; else if (counts) this.paused += dt;
+  };
+  Clock.prototype.start = function () { if (!this.started) { this.started = true; this.last = this.now(); } };
+  Clock.prototype.pause = function (r) { this._tick(); this.reasons[r || 'user'] = 1; };
+  Clock.prototype.resume = function (r) { this._tick(); delete this.reasons[r || 'user']; };
+  Clock.prototype.elapsed = function () { this._tick(); return Math.round(this.run); };
+  Clock.prototype.pausedMs = function () { this._tick(); return Math.round(this.paused); };
+  Clock.prototype.stop = function () { this._tick(); this.stopped = true; };
+  Clock.prototype.restore = function (e, p) { this.run = +e || 0; this.paused = +p || 0; if (this.run || this.paused) { this.started = true; this.last = this.now(); } };
+  function fmtTime(ms) { var s = Math.max(0, Math.round(ms / 1000)), m = Math.floor(s / 60); return m + ':' + (s % 60 < 10 ? '0' : '') + (s % 60); }
 
   // ------------------------------------------------------------------
   // Icons (24x24). Classes: a b c h = fills, sa sb sc = strokes.
@@ -689,7 +711,11 @@
     var theme = THEMES[opts.theme] ? opts.theme : 'expedition';
     var T = THEMES[theme], TI = THEME_ICONS[theme];
     var practice = !!opts.practice;
-    var difficulty = practice ? 'practice' : (CFG[opts.difficulty] ? opts.difficulty : 'stroll');
+    var reqDiff = DIFF_ALIAS[opts.difficulty] || opts.difficulty;   // accepts easy/normal/hard or stroll/trek/summit
+    var difficulty = practice ? 'practice' : (CFG[reqDiff] ? reqDiff : 'stroll');
+    var mode = practice ? 'practice' : (opts.mode === 'ranked' ? 'ranked' : 'relaxed');   // default relaxed: no clock, no board
+    var timer = mode === 'ranked' ? (opts.timer === 'shown' ? 'shown' : 'quiet') : 'none';
+    var clock = new Clock(), tickId = null;
     var seed = opts.seed != null ? opts.seed : new Date().toISOString().slice(0, 10);
     var board = generate(practice ? 'practice|' + seed : seed, difficulty);
     var shownDiff = practice ? 'practice' : (board.difficulty || difficulty);
@@ -734,14 +760,16 @@
     root.setAttribute('data-difficulty', shownDiff);
     root.setAttribute('data-phase', 'intro');
     var puzzleLabel = practice ? 'Practice board' : (board.crafted ? 'Board ' + board.puzzleNo + ' of 7' : 'Puzzle #' + board.puzzleNo);
-    var titleText = board.crafted && !practice ? board.crafted.title : 'The Daily Run';
+    var gameTitle = GAME_TITLE[theme];
+    var titleText = board.crafted && !practice ? board.crafted.title : gameTitle;
 
     root.innerHTML =
       '<div class="rg-wrap">' +
       '<header class="rg-head">' +
-        '<div class="rg-title"><div class="rg-kicker">' + esc(practice ? 'Practice' : 'The Daily Run') + '</div>' +
+        '<div class="rg-title"><div class="rg-kicker">' + esc(practice ? 'Practice' : (board.crafted ? gameTitle : 'Daily game')) + '</div>' +
         '<h2 class="rg-h">' + esc(titleText) + '</h2>' +
-        '<div class="rg-sub">' + esc(puzzleLabel) + ' &middot; <span class="rg-diff">' + DIFF_LABEL[shownDiff] + '</span></div></div>' +
+        '<div class="rg-sub">' + esc(puzzleLabel) + ' &middot; <span class="rg-diff">' + DIFF_LABEL[shownDiff] + '</span>' + (mode === 'ranked' ? ' &middot; Ranked' : '') + '</div></div>' +
+        '<div class="rg-clock" aria-label="Time"' + (timer === 'shown' ? '' : ' hidden') + ' style="align-self:center;font-weight:800;font-variant-numeric:tabular-nums;padding:6px 10px;border-radius:999px;background:var(--card);margin-right:6px">0:00</div>' +
         '<button type="button" class="rg-icon-btn rg-sound" aria-pressed="false" aria-label="Sound off">' + svg('soundOff') + '</button>' +
         '<button type="button" class="rg-icon-btn rg-help" aria-label="How to play">' + svg('help') + '</button>' +
       '</header>' +
@@ -1054,6 +1082,7 @@
       var w = st.w, why = w.check(t);
       if (why) { if (!quiet) reject(t, why); return false; }
       var before = w.stars(), c = board.cells[t];
+      clock.start();
       w.step(t);
       st.hint = null; st.hintBack = null;
       render(); renderPath();
@@ -1202,8 +1231,10 @@
         if (st.powers[k] != null) { st.powers[k] = null; st.target = null; setMsg(k === 'double' ? 'Double put back.' : 'Lucky put back.', ''); }
         else st.target = st.target === k ? null : k;
       }
+      syncFreePause();
       render(); if (st.target) statusMsg();
     });
+    function syncFreePause() { if (st.target) clock.pause('free'); else clock.resume('free'); }
     function flipMysteries() {
       var k = 0;
       board.cells.forEach(function (c, i) {
@@ -1219,7 +1250,7 @@
         if (c.t === 'mystery' && !revealed(i)) { setMsg('Lucky needs a find you can see. Try Lens first.', 'soft'); return; }
         if (c.rarity === 'rare') { setMsg('That one is already rare!', 'soft'); return; }
       }
-      st.powers[k] = i; st.target = null;
+      st.powers[k] = i; st.target = null; syncFreePause();
       render();
       if (k === 'double') { pop(i, 'is-pop'); floatText(i, 'x2', 'is-boost'); setMsg('Double set. Collect it to get two.', 'good'); }
       else { pop(i, 'is-shimmer'); burst(i, 8); floatText(i, cap(effRarity(i)) + '!', 'is-find rg-fr-' + effRarity(i)); setMsg('Lucky! Now ' + effRarity(i) + ': ' + findName(i) + '.', 'good'); }
@@ -1291,6 +1322,8 @@
       if (a === 'keep') { closeSheet(); }
       else if (a === 'commit') { closeSheet(); runCommit(); }
       else if (a === 'close-help') { closeSheet(); }
+      else if (a === 'diff') { if (opts.onDifficulty) opts.onDifficulty(b.getAttribute('data-v')); }
+      else if (a === 'relax') { if (opts.onRelax) opts.onRelax(); else { mode = 'relaxed'; timer = 'none'; showIntro(); } }
       else if (a === 'start') { closeSheet(); startPlanning(); }
       else if (a === 'copy') copyShare(b);
       else if (a === 'done') { closeSheet(); root.classList.add('is-finished'); if (typeof opts.onDone === 'function') opts.onDone(); }
@@ -1341,14 +1374,20 @@
         '</div>';
       openSheet('<div class="rg-intro-badge">' + svg(TI.obj) + '</div>' +
         '<div class="rg-kicker">' + esc(puzzleLabel) + ' &middot; ' + DIFF_LABEL[shownDiff] + '</div>' +
-        '<h3 class="rg-sheet-h rg-intro-h">' + esc(titleText) + '</h3>' +
+        '<h3 class="rg-sheet-h rg-intro-h">' + esc(titleText) + '</h3>' + introControls() +
         '<p class="rg-sheet-p">' + esc(intro) + '</p>' +
         '<div class="rg-intro-facts"><span><b>' + board.stepsMax + '</b> steps</span><span><b>3</b> ' + T.objs + '</span><span><b>' + (counts.find + counts.mystery) + '</b> finds</span></div>' +
         puBlock +
         '<div class="rg-sheet-actions"><button type="button" class="rg-btn rg-primary rg-big" data-act="start" data-autofocus>Let’s go</button></div>', 'is-intro');
     }
+    // v5.5 round 2: difficulty and "Play without the clock" live in this intro (the app has no second intro sheet).
+    function introControls() {
+      if (global.Arcade && global.Arcade._util && global.Arcade._util.introControls) return global.Arcade._util.introControls(opts, mode, DIFF_PLAIN[shownDiff] || 'easy');
+      return '';
+    }
     function startPlanning() {
       st.phase = 'plan'; root.setAttribute('data-phase', 'plan');
+      if (timer === 'shown' && !tickId) { var ck = root.querySelector('.rg-clock'); tickId = setInterval(function () { if (!destroyed && ck) ck.textContent = fmtTime(clock.elapsed()); }, 500); }
       render(); renderPath(); statusMsg();
       if (opts.tutorial || practice) startCoach();
       try { el.board.focus({ preventScroll: true }); } catch (e) { /* ignore */ }
@@ -1446,6 +1485,8 @@
     function runCommit() {
       if (st.phase !== 'plan') return;
       st.phase = 'commit';
+      st.target = null; clock.resume('free'); clock.stop();
+      if (tickId) { clearInterval(tickId); tickId = null; }
       if (coach) { coach.k = coach.steps.length; showCoach(); }
       st.hint = null; st.hintBack = null; st.revealSet = {};
       root.classList.add('is-committing');
@@ -1522,9 +1563,17 @@
         var used = { magnet: st.powers.magnet ? 1 : 0, lens: st.powers.lens ? 1 : 0, double: st.powers.double != null ? 1 : 0, lucky: st.powers.lucky != null ? 1 : 0 };
         PU.forEach(function (p) { inv[p.k] -= used[p.k]; });
         var grid = routeGrid(), share = shareText(stars, grid);
+        var timeMs = mode === 'ranked' ? clock.elapsed() : null;
         st.result = {
+          // legacy fields (kept for existing callers)
           stars: stars, finds: finds, stepsUsed: w.steps, stepsMax: w.max + w.bonus,
-          powerUpsUsed: used, shareText: share, routeGrid: grid
+          powerUpsUsed: used, shareText: share, routeGrid: grid,
+          // v5.5 unified arcade result shape
+          game: 'trail', puzzleNo: board.puzzleNo, seed: seed,
+          difficulty: DIFF_PLAIN[shownDiff] || 'easy', mode: mode,
+          score: { steps: w.steps, stepsMax: w.max + w.bonus, par: board.par, timeMs: timeMs },
+          pausedMs: clock.pausedMs(),
+          log: { moves: w.moves.slice() }
         };
         st.haul = haul; st.consolation = consolation;
         sound.chord(stars === 3 ? 659 : 523); buzz(stars === 3 ? [20, 50, 20, 50, 40] : [20, 40, 20]);
@@ -1549,14 +1598,14 @@
       return rows.join('\n');
     }
     function shareText(stars, grid) {
-      var head = 'The Daily Run ' + (practice ? 'Practice' : (board.crafted ? 'Board ' + board.puzzleNo : '#' + board.puzzleNo)) + ' · ' + DIFF_LABEL[shownDiff];
+      var head = gameTitle + ' ' + (practice ? 'Practice' : (board.crafted ? 'Board ' + board.puzzleNo : '#' + board.puzzleNo)) + ' · ' + DIFF_LABEL[shownDiff];
       var st3 = '', k;
       for (k = 0; k < 3; k++) st3 += k < stars ? '⭐' : '☆';
       return head + '\n' + st3 + ' ' + stars + '/3\n' + grid;
     }
 
     function headline(stars) {
-      if (practice) return ['Practice complete!', 'Practice boards are just for fun. Your Daily Run keeps its finds.'];
+      if (practice) return ['Practice complete!', 'Practice boards are just for fun. Your daily board keeps its finds.'];
       if (stars === 3) return ['Perfect route! All 3 reached', 'That trail was a beauty.'];
       if (stars === 2) return ['Nice route! 2 of 3 reached', 'Great trail. Tomorrow brings a new board.'];
       if (stars === 1) return ['Good outing! 1 of 3 reached', 'Every trail teaches the next one.'];
@@ -1599,10 +1648,10 @@
       openSheet('<div class="rg-sheet-grab"></div>' +
         '<div class="rg-res-stars">' + stars + '</div>' + badge +
         '<h3 class="rg-sheet-h rg-res-h">' + esc(hl[0]) + '</h3>' +
-        '<p class="rg-sheet-p rg-res-sub">' + esc(hl[1]) + ' ' + res.stepsUsed + ' of ' + res.stepsMax + ' steps used.</p>' +
+        '<p class="rg-sheet-p rg-res-sub">' + esc(hl[1]) + ' ' + res.stepsUsed + ' of ' + res.stepsMax + ' steps used.' + (res.score && res.score.timeMs != null ? ' Time ' + fmtTime(res.score.timeMs) + '.' : '') + '</p>' +
         haulBlock +
         '<div class="rg-res-sec"><div class="rg-res-lab">Share</div>' +
-          '<div class="rg-share"><div class="rg-share-meta"><b>The Daily Run</b><span>' + esc(practice ? 'Practice' : (board.crafted ? 'Board ' + board.puzzleNo : '#' + board.puzzleNo)) + ' · ' + DIFF_LABEL[shownDiff] + '</span>' +
+          '<div class="rg-share"><div class="rg-share-meta"><b>' + esc(gameTitle) + '</b><span>' + esc(practice ? 'Practice' : (board.crafted ? 'Board ' + board.puzzleNo : '#' + board.puzzleNo)) + ' · ' + DIFF_LABEL[shownDiff] + '</span>' +
           '<span class="rg-share-stars" aria-label="' + res.stars + ' of 3 stars">' + [0, 1, 2].map(function (k) { return '<i class="' + (k < res.stars ? 'is-on' : '') + '">' + svg('star') + '</i>'; }).join('') + '<span>' + res.stars + '/3</span></span></div><div class="rg-sq-grid" aria-label="Route shape">' + sq + '</div></div>' +
         '</div>' +
         next +
@@ -1624,14 +1673,51 @@
       else fallback();
     }
 
+    function onVis() { if (document.hidden) clock.pause('hidden'); else clock.resume('hidden'); }
+    document.addEventListener('visibilitychange', onVis);
+
+    // v5.5 resume: daily boards continue instead of restarting (state from getState()).
+    function applyResume(rs) {
+      if (!rs || rs.game !== 'trail' || String(rs.seed) !== String(seed) || rs.difficulty !== (DIFF_PLAIN[shownDiff] || 'easy')) return false;
+      if (rs.finished && rs.result) {
+        st.result = rs.result; st.phase = 'done'; root.setAttribute('data-phase', 'done'); root.classList.add('is-committing');
+        st.haul = (rs.result.finds || []).filter(function (f, k, a) { return !(k > 0 && a[k - 1] === f); }).map(function (f) {
+          var m = /^find\.(\w+)\.(.+)$/.exec(f.id); return { rarity: f.rarity, item: m ? m[2] : 0, via: 'trail' };
+        });
+        clock.restore(rs.elapsedMs, rs.pausedMs); clock.stop();
+        render(); showResults();
+        return true;
+      }
+      if (!rs.started) return false;
+      var p = rs.powers || {};
+      st.powers.magnet = !!p.magnet; st.powers.lens = !!p.lens;
+      st.powers.double = p.double != null ? p.double : null; st.powers.lucky = p.lucky != null ? p.lucky : null;
+      (rs.moves || []).forEach(function (m) { if (st.w.check(m) === '') st.w.step(m); });
+      clock.restore(rs.elapsedMs, rs.pausedMs);
+      startPlanning();
+      setMsg('Welcome back! Your trail is just as you left it.', 'good');
+      return true;
+    }
+
     // initial paint
     render(); renderPath(); statusMsg();
-    showIntro();
+    if (!applyResume(opts.resume)) showIntro();
 
     return {
+      getState: function () {
+        return {
+          v: 1, game: 'trail', seed: seed, difficulty: DIFF_PLAIN[shownDiff] || 'easy', mode: mode,
+          moves: st.w.moves.slice(),
+          powers: { magnet: st.powers.magnet, lens: st.powers.lens, double: st.powers.double, lucky: st.powers.lucky },
+          started: st.phase !== 'intro', finished: st.phase === 'done', result: st.result || null,
+          elapsedMs: clock.elapsed(), pausedMs: clock.pausedMs()
+        };
+      },
       destroy: function () {
         destroyed = true;
         timers.forEach(clearTimeout);
+        if (tickId) clearInterval(tickId);
+        document.removeEventListener('visibilitychange', onVis);
         el.board.removeEventListener('pointerdown', onDown);
         el.board.removeEventListener('pointermove', onMove);
         el.board.removeEventListener('pointerup', onUp);
@@ -1649,6 +1735,7 @@
     boards: CRAFTED.map(function (d) { return d.id; }),
     boardInfo: CRAFTED.map(function (d) { return { id: d.id, title: d.title, twist: d.twist, difficulty: d.diff }; }),
     // test / integration helpers (not part of the core contract)
+    DIFF_LABEL: DIFF_LABEL, DIFF_ALIAS: DIFF_ALIAS,
     _engine: { generate: generate, parseMap: parseMap, search: search, evaluate: evaluate, Walker: Walker, puzzleNumber: puzzleNumber, boardSignature: boardSignature, CRAFTED: CRAFTED }
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

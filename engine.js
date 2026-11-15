@@ -52,74 +52,242 @@
     return out;
   }
 
-  /* ---------- regimen ---------- */
+  /* ---------- regimen (v5.5: one schedule model for medicines, vitamins and habits) ---------- */
+  var ROLLOVER = 180; // 3:00 local. Minutes after midnight but before 3:00 still belong to the previous game day.
   var SLOTS = [
     { id: 'morning', label: 'Morning', from: 0, to: 660 },
     { id: 'midday', label: 'Midday', from: 660, to: 960 },
     { id: 'evening', label: 'Evening', from: 960, to: 1230 },
-    { id: 'bedtime', label: 'Bedtime', from: 1230, to: 1440 }
+    { id: 'bedtime', label: 'Bedtime', from: 1230, to: 1440 + ROLLOVER }
   ];
   function slotFor(mins) { for (var i = 0; i < SLOTS.length; i++) if (mins >= SLOTS[i].from && mins < SLOTS[i].to) return SLOTS[i]; return SLOTS[3]; }
+  // Game-day minutes: 00:00-02:59 belong to the END of the game day (F-3), so they sort after 23:59.
+  function gameMins(hhmm) { var m = typeof hhmm === 'number' ? hhmm : toMins(hhmm); return m < ROLLOVER ? m + 1440 : m; }
+  function hhmm(mins) { mins = ((Math.round(mins) % 1440) + 1440) % 1440; return ('0' + Math.floor(mins / 60)).slice(-2) + ':' + ('0' + mins % 60).slice(-2); }
 
+  /* ----- calendar helpers (day numbers; computed from date parts, so DST never shifts a day) ----- */
+  function dayOfDate(y, m, d) { return Math.round((Date.UTC(y, m, d) - Date.UTC(BASE.y, BASE.m, BASE.d)) / 86400000); }
+  function dayOfJs(date) { return dayOfDate(date.getFullYear(), date.getMonth(), date.getDate()); }
+  function daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+  function isoDate(dayNum) { var d = dateOf(dayNum); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
+  function mod(a, n) { return ((a % n) + n) % n; }
+  /* gameNow(date) -> { day, clock }. Live mode: the game day comes from the local date, rolling over at 3:00.
+   * From 00:00 to 02:59 the clock reads 1440+ (end of the previous game day). */
+  function gameNow(date) {
+    var mins = date.getHours() * 60 + date.getMinutes(), cal = dayOfJs(date);
+    return mins < ROLLOVER ? { day: cal - 1, clock: mins + 1440 } : { day: cal, clock: mins };
+  }
+
+  /* ----- schedule model (PM spec §1.2). Legacy v5.4 "kind" items map onto it, so old presets compile identically. ----- */
+  function schedOf(item) {
+    if (item && item.schedule) return item.schedule;
+    var times = item && item.times && item.times.length ? item.times.slice() : ['08:00'];
+    var s = { pattern: { kind: 'daily' }, times: { mode: 'list', list: times }, start: item && item.startDay != null ? item.startDay : null, end: item && item.endDay != null ? item.endDay : null, doseSteps: null };
+    var k = item && item.kind;
+    if (k === 'prn') s.pattern = { kind: 'asNeeded' };
+    else if (k === 'weekly') s.pattern = { kind: 'weekly', everyWeeks: 1, days: [item.weekday == null ? 0 : item.weekday] };
+    else if (k === 'taper') s.doseSteps = (item.steps || []).map(function (st) { return { from: st.fromDay, label: st.label }; });
+    return s;
+  }
+  function isAsNeeded(item) { return schedOf(item).pattern.kind === 'asNeeded'; }
+  function itemType(item) { return (item && item.type) || 'med'; }
+  // everyHours expands to first, first+h, ... while at or before last and within 24 hours (sorted by game minutes).
+  function expandTimes(times) {
+    if (!times) return ['08:00'];
+    if (times.mode === 'everyHours') {
+      var h = Math.max(1, Math.min(12, +times.hours || 8)), first = gameMins(times.first || '08:00');
+      var last = times.last ? gameMins(times.last) : first + 1440 - 1, out = [];
+      if (last < first) last = first;
+      for (var m = first; m <= last && m < first + 1440 && out.length < 24; m += h * 60) out.push(hhmm(m));
+      return out;
+    }
+    var list = (times.list && times.list.length ? times.list : ['08:00']).slice();
+    return list.sort(function (a, b) { return gameMins(a) - gameMins(b); }).filter(function (t, i, a) { return a.indexOf(t) === i; });
+  }
+  function anchorOf(item, s) { return s.start != null ? s.start : (item.createdDay != null ? item.createdDay : 1); }
+  function weekStart(day) { return day - weekday(day); }
   function isPaused(med, dayNum) {
     if (!med.paused) return false;
     if (med.pausedFrom && dayNum < med.pausedFrom) return false;
     if (med.pausedUntil && dayNum > med.pausedUntil) return false;
     return true;
   }
-  function isScheduledOn(med, dayNum) {
-    if (med.kind === 'prn') return false;
-    if (isPaused(med, dayNum)) return false;
-    if (med.startDay && dayNum < med.startDay) return false;
-    if (med.endDay && dayNum > med.endDay) return false;
-    if (med.kind === 'weekly') return weekday(dayNum) === (med.weekday == null ? 0 : med.weekday);
+  function isEnded(item, day) { return item.ended != null && day >= item.ended; }
+  /* occursOn(item, day): the ONE function that says whether a scheduled item is due on a game day. */
+  function occursOn(item, day) {
+    if (!item || isPaused(item, day) || isEnded(item, day)) return false;
+    var s = schedOf(item), p = s.pattern;
+    if (p.kind === 'asNeeded') return false;
+    if (s.start != null && day < s.start) return false;
+    if (s.end != null && day > s.end) return false;
+    var d = dateOf(day);
+    switch (p.kind) {
+      case 'daily': return true;
+      case 'weekdays': return (p.days || []).indexOf(d.getDay()) >= 0;
+      case 'everyNDays': return mod(day - anchorOf(item, s), Math.max(1, p.n || 1)) === 0;
+      case 'weekly': return (p.days || []).indexOf(d.getDay()) >= 0 && mod(Math.round((weekStart(day) - weekStart(anchorOf(item, s))) / 7), Math.max(1, p.everyWeeks || 1)) === 0;
+      case 'monthly':
+        if (p.by === 'nth') {
+          if (d.getDay() !== p.weekday) return false;
+          var dim = daysInMonth(d.getFullYear(), d.getMonth());
+          return p.nth === -1 ? d.getDate() + 7 > dim : Math.ceil(d.getDate() / 7) === p.nth;
+        }
+        return d.getDate() === Math.min(p.date || 1, daysInMonth(d.getFullYear(), d.getMonth()));
+      case 'cycle': return mod(day - (p.day1 != null ? p.day1 : anchorOf(item, s)), (p.on || 1) + (p.off || 0)) < (p.on || 1);
+    }
     return true;
   }
-  // Taper: the label changes per step; the fragment count does not.
-  function doseLabel(med, dayNum) {
-    if (med.kind === 'taper' && med.steps && med.steps.length) {
-      var lbl = med.steps[0].label;
-      for (var i = 0; i < med.steps.length; i++) if (dayNum >= med.steps[i].fromDay) lbl = med.steps[i].label;
-      return lbl;
-    }
-    return med.strength || '';
-  }
-  function taperStepChanged(med, dayNum) {
-    if (med.kind !== 'taper' || !med.steps) return false;
-    for (var i = 1; i < med.steps.length; i++) if (med.steps[i].fromDay === dayNum) return true;
+  function isScheduledOn(med, dayNum) { return occursOn(med, dayNum); } // v5.4 name, kept for callers and tests
+  // Boss Day: an item whose doses are 7 or more days apart (weekly on one day, every N>=7 days or weeks, monthly).
+  function bossEligible(item) {
+    var p = schedOf(item).pattern;
+    if (p.kind === 'weekly') return (p.days || []).length === 1;
+    if (p.kind === 'everyNDays') return (p.n || 1) >= 7;
+    if (p.kind === 'monthly') return true;
     return false;
   }
+  // Taper / changing dose: the label follows the steps; the check-in count does not change.
+  function doseLabel(med, dayNum) {
+    var steps = schedOf(med).doseSteps, lbl = med.strength || '';
+    if (steps && steps.length) { var hit = false; for (var i = 0; i < steps.length; i++) if (dayNum >= steps[i].from) { lbl = steps[i].label; hit = true; } if (!hit && !med.strength) lbl = steps[0].label; }
+    return lbl;
+  }
+  function taperStepChanged(med, dayNum) {
+    var steps = schedOf(med).doseSteps; if (!steps) return false;
+    for (var i = 1; i < steps.length; i++) if (steps[i].from === dayNum) return true;
+    return false;
+  }
+  /* "How many" per dose: item.amount (default for every time) and schedule.amounts[time] (a different amount at one time).
+   * Shown only when it isn't one (one pill is the normal case and would be noise on every row). */
+  function amountFor(item, time) { var s = schedOf(item); return (s.amounts && time && s.amounts[time]) || item.amount || ''; }
+  function amountShown(a) { return a && !/^1\s/.test(a) ? a : ''; }
+  function doseText(item, day, time) { return [doseLabel(item, day), amountShown(amountFor(item, time))].filter(Boolean).join(' · '); }
+  function timesOn(item, day) {
+    var list = expandTimes(schedOf(item).times);
+    // S5: an item added mid-day starts today only with the times still ahead.
+    if (item.startMins != null && schedOf(item).start === day) list = list.filter(function (t) { return gameMins(t) >= item.startMins; });
+    return list;
+  }
 
-  /* compilePlan: groups the day's scheduled doses into stacks by time of day.
-   * Every day is worth exactly 100 Charge. Each stack = 100 / stacks. Never weighted by medicine. */
+  /* compilePlan: groups the day's doses into check-ins by time of day.
+   * Every day is worth exactly 100 Spark, split equally across time-of-day groups (max 4). Inside a group, doses more
+   * than 90 minutes apart become separate check-ins (F-2) that split the group's share equally. Never weighted by item. */
+  var CLUSTER = 90;
   function compilePlan(meds, dayNum) {
-    var buckets = {}, order = [], prn = [], anyScheduledKind = false;
+    var groups = {}, prn = [], anyScheduledKind = false;
     (meds || []).forEach(function (med) {
-      if (med.kind === 'prn') { if (!isPaused(med, dayNum)) prn.push(med.id); return; }
+      if (isAsNeeded(med)) { if (!isPaused(med, dayNum) && !isEnded(med, dayNum)) prn.push(med.id); return; }
+      if (isEnded(med, dayNum)) return;
       anyScheduledKind = true;
-      if (!isScheduledOn(med, dayNum)) return;
-      (med.times && med.times.length ? med.times : ['08:00']).forEach(function (t) {
-        var m = toMins(t), s = slotFor(m);
-        if (!buckets[s.id]) { buckets[s.id] = { id: s.id, label: s.label, mins: m, doses: [], kind: 'dose' }; order.push(s.id); }
-        var b = buckets[s.id];
-        b.mins = Math.min(b.mins, m);
-        b.doses.push({ medId: med.id, label: doseLabel(med, dayNum), weekly: med.kind === 'weekly' });
+      if (!occursOn(med, dayNum)) return;
+      var boss = bossEligible(med);
+      timesOn(med, dayNum).forEach(function (t) {
+        var m = gameMins(t), sl = slotFor(m);
+        (groups[sl.id] = groups[sl.id] || { slot: sl, doses: [] }).doses.push({ medId: med.id, label: doseText(med, dayNum, t), weekly: boss, mins: m });
       });
     });
-    var stacks = order.map(function (k) { return buckets[k]; }).sort(function (a, b) { return a.mins - b.mins; });
+    var glist = Object.keys(groups).map(function (k) { return groups[k]; });
+    glist.forEach(function (g) { g.doses.sort(function (a, b) { return a.mins - b.mins; }); g.first = g.doses[0].mins; });
+    glist.sort(function (a, b) { return a.first - b.first; });
+    var gv = allocate(100, glist.length), gs = allocate(80, glist.length), gx = allocate(80, glist.length), go = allocate(20, glist.length), stacks = [];
+    glist.forEach(function (g, gi) {
+      var clusters = [];
+      g.doses.forEach(function (d) { var c = clusters[clusters.length - 1]; if (!c || d.mins - c.mins > CLUSTER) { c = { mins: d.mins, doses: [] }; clusters.push(c); } c.doses.push(d); });
+      var v = allocate(gv[gi], clusters.length), s = allocate(gs[gi], clusters.length), x = allocate(gx[gi], clusters.length), o = allocate(go[gi], clusters.length);
+      clusters.forEach(function (c, ci) {
+        stacks.push({ id: g.slot.id + (ci ? '-' + (ci + 1) : ''), group: g.slot.id, label: g.slot.label, mins: c.mins, kind: 'dose', value: v[ci], stars: s[ci], xp: x[ci], onTime: o[ci],
+          doses: c.doses.map(function (d) { return { medId: d.medId, label: d.label, weekly: d.weekly, mins: d.mins }; }), boss: c.doses.some(function (d) { return d.weekly; }) });
+      });
+    });
+    stacks.sort(function (a, b) { return a.mins - b.mins; });
     var rest = false, journal = false;
     if (!stacks.length) {
       if (!anyScheduledKind && prn.length) { journal = true; stacks = [{ id: 'journal', label: 'Daily journal', mins: 720, doses: [], kind: 'journal' }]; }
       else { rest = true; stacks = [{ id: 'rest', label: 'Rest day', mins: 480, doses: [], kind: 'rest' }]; }
+      var only = stacks[0]; only.value = 100; only.stars = 80; only.xp = 80; only.onTime = 20; only.boss = false;
     }
-    var n = stacks.length, v = allocate(100, n), s = allocate(80, n), x = allocate(80, n), o = allocate(20, n);
-    stacks.forEach(function (st, i) {
-      st.value = v[i]; st.stars = s[i]; st.xp = x[i]; st.onTime = o[i];
-      st.boss = st.doses.some(function (d) { return d.weekly; });
-    });
     return { dayNum: dayNum, stacks: stacks, rest: rest, journal: journal, boss: stacks.some(function (s) { return s.boss; }), prn: prn, locked: true };
   }
   function planTotal(plan) { return plan.stacks.reduce(function (a, s) { return a + s.value; }, 0); }
+
+  /* F-6: one Gold headline per week (Mon-Sun), decided per week. A Boss Day in this week -> "Beat the Boss"; otherwise "Load the week". */
+  function weekDays(weekIdx) { var out = []; for (var i = 1; i <= 7; i++) out.push(weekIdx * 7 + i); return out; }
+  function bossDayInWeek(items, weekIdx) {
+    var days = weekDays(weekIdx);
+    for (var i = 0; i < days.length; i++) if ((items || []).some(function (it) { return bossEligible(it) && occursOn(it, days[i]); })) return days[i];
+    return null;
+  }
+  function nextBossDay(items, fromDay, maxDays) {
+    for (var d = fromDay; d < fromDay + (maxDays || 400); d++) if ((items || []).some(function (it) { return bossEligible(it) && occursOn(it, d); })) return d;
+    return null;
+  }
+  function nextOccurrenceDay(item, fromDay, maxDays) {
+    for (var d = fromDay; d < fromDay + (maxDays || 400); d++) if (occursOn(item, d) && timesOn(item, d).length) return d;
+    return null;
+  }
+  /* nextOccurrences(item, day, clock, n): the live "Next: ..." preview. Labels: Today 8:00 PM, Tomorrow 8:00 AM, Sun 8:00 AM, Mon, Dec 14. */
+  function nextOccurrences(item, day, clock, n) {
+    var out = [];
+    for (var d = day; d < day + 400 && out.length < (n || 4); d++) {
+      if (!occursOn(item, d)) continue;
+      timesOn(item, d).forEach(function (t) { var m = gameMins(t); if (out.length < (n || 4) && (d > day || m > clock)) out.push({ day: d, mins: m, label: relDay(d, day) + ' ' + fmtTime(m) }); });
+    }
+    return out;
+  }
+  function relDay(d, today) { return d === today ? 'Today' : d === today + 1 ? 'Tomorrow' : d - today < 7 ? WD[weekday(d)] : fmtDate(d); }
+
+  /* ----- scheduleSentence(item): the ONE way a schedule reads, on every surface (editor, list, detail, day sheet). ----- */
+  function ord(n) { var s = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (s[(v - 20) % 10] || s[v] || s[0]); }
+  function joinAnd(list) { return list.length <= 1 ? (list[0] || '') : list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1]; }
+  var NTH = { 1: '1st', 2: '2nd', 3: '3rd', 4: '4th', '-1': 'last' };
+  function daysText(days) {
+    var d = (days || []).slice().sort(function (a, b) { return a - b; });
+    if (d.length === 7) return 'Every day';
+    if (d.join() === '1,2,3,4,5') return 'Every weekday';
+    if (d.join() === '0,6') return 'Saturdays and Sundays';
+    if (d.length === 1) return 'Every ' + WD_LONG[d[0]];
+    return 'Every ' + joinAnd(d.map(function (x) { return WD[x]; }));
+  }
+  function timesText(times) {
+    if (times && times.mode === 'everyHours') { var l = expandTimes(times); return 'every ' + times.hours + ' hours from ' + fmtTime(toMins(times.first || '08:00')) + ' (' + l.map(function (t) { return fmtTime(toMins(t)); }).join(', ') + ')'; }
+    return 'at ' + joinAnd(expandTimes(times).map(function (t) { return fmtTime(toMins(t)); }));
+  }
+  function timesTextWithAmounts(item, s) {
+    var list = expandTimes(s.times), amts = list.map(function (t) { return amountFor(item, t); });
+    var differ = s.times.mode !== 'everyHours' && amts.some(function (a) { return a !== amts[0]; });
+    if (!differ) return timesText(s.times);
+    return 'at ' + joinAnd(list.map(function (t, i) { return fmtTime(toMins(t)) + (amts[i] ? ' (' + amts[i] + ')' : ''); }));
+  }
+  function patternText(p) {
+    switch (p.kind) {
+      case 'daily': return 'Every day';
+      case 'weekdays': return daysText(p.days);
+      case 'everyNDays': return p.n === 1 ? 'Every day' : 'Every ' + p.n + ' days';
+      case 'weekly': return (p.everyWeeks || 1) === 1 ? daysText(p.days).replace('Every day', 'Every day of the week') : 'Every ' + p.everyWeeks + ' weeks on ' + joinAnd((p.days || []).slice().sort().map(function (x) { return WD_LONG[x]; }));
+      case 'monthly': return p.by === 'nth' ? 'The ' + NTH[p.nth] + ' ' + WD_LONG[p.weekday] + ' of each month' : 'The ' + ord(p.date) + ' of each month' + (p.date >= 29 ? ' (the last day in shorter months)' : '');
+      case 'cycle': return p.on + ' days on, ' + p.off + ' off';
+      case 'asNeeded': return 'As needed';
+    }
+    return 'Every day';
+  }
+  function scheduleSentence(item) {
+    var s = schedOf(item), p = s.pattern;
+    if (p.kind === 'asNeeded') return 'As needed';
+    return patternText(p) + (p.kind === 'cycle' ? ', ' : ' ') + timesTextWithAmounts(item, s);
+  }
+  // The start/end line that goes with the sentence ("Starts tomorrow", "For 10 days, until Fri, Nov 21").
+  function rangeText(item, today) {
+    var s = schedOf(item), parts = [];
+    if (s.start != null && s.start > today) parts.push('Starts ' + (s.start === today + 1 ? 'tomorrow' : fmtDate(s.start)));
+    if (s.end != null) parts.push((s.start != null ? 'For ' + (s.end - s.start + 1) + ' days, until ' : 'Until ') + fmtDate(s.end));
+    return parts.join(' · ');
+  }
+  /* Migration helper: a v5.4 item -> a v5.5 item with an explicit schedule (used by presets and tests). */
+  function migrateItem(item) {
+    var o = JSON.parse(JSON.stringify(item)); o.schedule = schedOf(item); o.type = o.type || 'med';
+    delete o.kind; delete o.times; delete o.weekday; delete o.steps; delete o.startDay; delete o.endDay; delete o.color; delete o.shape;
+    return o;
+  }
 
   /* ---------- check-in credit ---------- */
   var FULL = { swallowed: 1, took: 1, held: 1, rest: 1, journal: 1 };
@@ -262,13 +430,14 @@
     { id: 'place', text: 'Place a piece at your {home}' },
     { id: 'album', text: 'Look at a {find} in your {album}' }
   ];
+  // v5.5: these are "Today's goals" in the UI (the word "quest" now means only the companion's overnight Quest).
   function questsFor(dayNum) {
-    var runQ = dayNum % 2 === 0 ? { id: 'run2', text: 'Get 2 stars on today’s {run}', goal: 'run2' } : { id: 'run', text: 'Play today’s {run}', goal: 'run' };
-    var c = COLLECT_Q[dayNum % COLLECT_Q.length];
+    // v5.5 round 2: no goal repeats a card already on Today (the check-in hero, the games card). Same value every day.
+    var c = COLLECT_Q[dayNum % COLLECT_Q.length], c2 = COLLECT_Q[(dayNum + 1) % COLLECT_Q.length];
     return [
-      { id: 'checkin', text: 'Check in at a stack. Any answer counts.', goal: 'checkin', done: false, reward: QUEST_REWARD },
-      { id: runQ.id, text: runQ.text, goal: runQ.goal, done: false, reward: QUEST_REWARD },
-      { id: c.id, text: c.text, goal: c.id, done: false, reward: QUEST_REWARD }
+      { id: 'two', text: 'Play 2 different games today', goal: 'two', done: false, reward: QUEST_REWARD },
+      { id: c.id, text: c.text, goal: c.id, done: false, reward: QUEST_REWARD },
+      { id: c2.id, text: c2.text, goal: c2.id, done: false, reward: QUEST_REWARD }
     ];
   }
   // Swapped quest is always of equal value (Tier 2/3 barrier): the barrier itself is never rewarded.
@@ -303,7 +472,24 @@
     if (!stack) return { label: 'No entry', tone: 'neutral', icon: '○' };
     if (clockMins < stack.mins - WINDOW.before) return { label: fmtTime(stack.mins), tone: 'upcoming', icon: '◷' };
     if (clockMins <= stack.mins + WINDOW.after) return { label: 'Due now', tone: 'attn', icon: '●' };
-    return { label: 'Not logged yet', tone: 'neutral', icon: '○' };
+    return { label: 'No entry yet', tone: 'neutral', icon: '○' };
+  }
+  /* recordLabel(entry, stack, opts): the one state label for every record surface (Today chips, Did I take it?,
+   * the calendar day sheet, item detail, lock screen). Habit-only check-ins read "Done", never "Taken".
+   * opts: { clock, habit, past }. A past day with nothing logged is "No entry", in neutral grey. Never red, never "missed". */
+  function recordLabel(entry, stack, opts) {
+    opts = opts || {};
+    var st = entry && entry.state, habit = !!opts.habit;
+    if (stack && stack.kind === 'rest') return st && st !== 'none' ? { label: 'All set ' + fmtTime(entry.at), tone: 'done', icon: '✓' } : { label: 'Nothing was scheduled', tone: 'neutral', icon: '☾' };
+    if (!st || st === 'none') {
+      if (opts.past || !stack) return { label: 'No entry', tone: 'neutral', icon: '○' };
+      return doseStatus(null, stack, opts.clock == null ? 0 : opts.clock);
+    }
+    if (st === 'unsure' && entry.fromOut) return { label: 'Out ' + fmtTime(entry.outAt) + ', not confirmed', tone: 'neutral', icon: '?' };
+    if (st === 'didnt') return { label: habit ? 'Not today' : 'Not taken', tone: 'neutral', icon: '–' };
+    var ds = doseStatus(entry, stack, opts.clock == null ? 1439 : opts.clock);
+    if (habit && (st === 'swallowed' || st === 'took')) ds = { label: ds.label.replace(/^Taken/, 'Done'), tone: ds.tone, icon: ds.icon };
+    return ds;
   }
 
   /* ---------- phase of a stack right now: upcoming | due | out | past | answered ---------- */
@@ -330,11 +516,10 @@
   function dayCharge(plan, credits) { var c = 0; plan.stacks.forEach(function (s) { if (credits[s.id]) c += credits[s.id].charge || 0; }); return Math.min(100, c); }
 
   /* ---------- v5.3 Campfire: a daily-visit count (Expedition "Campfire", Grove "Garden days"). Same engine for both. ----------
-   * A day is lit by ONE play action before the 3:00 rollover: finishing the Daily Run, or feeding the companion.
+   * A day is lit by ONE play action before the 3:00 rollover: finishing any daily game, or feeding the companion.
    * Doses never light it, never break it and are never required (a weekly-injection day lights the same way).
    * Never touches Grand Draw tickets, Spark/Charge, the Power Bank or the health record.
    * Kid profiles: no Campfire (counts, shields and milestone chests are off); days played still grow the companion. */
-  var ROLLOVER = 180; // 3:00 local. Minutes after midnight but before 3:00 still belong to the previous game day.
   function gameDayFor(calendarDay, minsOfDay) { return minsOfDay < ROLLOVER ? calendarDay - 1 : calendarDay; }
   var CAMP = {
     milestones: [3, 7, 14, 30, 50, 75, 100, 150, 200, 250, 365, 500, 730, 1000], // then every 365 days after 1000 (1365, 1730, ...)
@@ -387,7 +572,7 @@
     fx.count = c.count;
     return { camp: c, fx: fx };
   }
-  /* Relight: offered after a break that no shield could cover, for 48h. Needs today's Daily Run + one extra practice board. */
+  /* Relight: offered after a break that no shield could cover, for 48h. Needs one of today's daily games + one extra practice board. */
   function relightOffer(c, day) {
     if (!c || !c.broken || c.broken.prev <= 0) return null;
     if (day - c.broken.day > CAMP.relightDays || day <= c.broken.day) return null;
@@ -442,8 +627,38 @@
     return { camp: c, ok: true };
   }
 
+  /* ---------- v5.5 arcade: three daily games share one reward frame (games doc §6.1) ----------
+   * Each game pays once a day (its first finished daily board). The first paying game of the day brings the chest, the one
+   * Grand Draw ticket and lights the Campfire; games 2-3 pay a small bonus. Practice and replays pay nothing. Dose-blind:
+   * nothing here reads doses, Spark or the record. Stars/XP are the same at every difficulty; 2+ stars on Normal/Hard adds one Find. */
+  var ARCADE = { games: ['trail', 'word', 'memory'], maxPaid: 3, first: { stars: [30, 10], xp: [50, 10], compXp: [30, 10] }, bonus: { stars: [10, 5], xp: [15, 5], compXp: [10, 5] } };
+  function arcadeReward(game, result, ctx) {
+    ctx = ctx || {}; result = result || {};
+    var zero = { stars: 0, xp: 0, compXp: 0, chest: null, ticket: 0, diffFind: null, lights: false, paid: false, first: false };
+    var practice = ctx.practice || result.mode === 'practice' || result.difficulty === 'practice';
+    if (practice) return zero;
+    var paidGames = ctx.paidGames || [];
+    var out = Object.assign({}, zero, { lights: true });
+    if (paidGames.indexOf(game) >= 0 || paidGames.length >= ARCADE.maxPaid) return out;
+    var s = Math.max(0, Math.min(3, result.stars || 0)), first = paidGames.length === 0, k = first ? ARCADE.first : ARCADE.bonus;
+    out.paid = true; out.first = first;
+    out.stars = k.stars[0] + k.stars[1] * s; out.xp = k.xp[0] + k.xp[1] * s; out.compXp = k.compXp[0] + k.compXp[1] * s;
+    if (first) { out.chest = ctx.isKid ? null : runChestFor(s); out.ticket = 1; }
+    var d = result.difficulty === 'trek' ? 'normal' : result.difficulty === 'summit' ? 'hard' : result.difficulty;
+    if (s >= 2 && d === 'normal') out.diffFind = 'common';
+    if (s >= 2 && d === 'hard') out.diffFind = 'uncommon';
+    return out;
+  }
+
+  /* ---------- real dates (no hard-coded "Sun, Nov 29") ---------- */
+  var DRAW_ANCHOR = 21; // Sun, Nov 29 2026; draws every 4th Sunday from here
+  function drawNightDay(fromDay) { var d = DRAW_ANCHOR; if (fromDay > d) d += Math.ceil((fromDay - d) / 28) * 28; return d; }
+  function boardNo(dayNum) { return dayOfDate(2026, 10, 8) + dayNum - dayOfDate(2026, 0, 1) + 1; } // days since 2026-01-01, same as the Run's puzzle number
+
   /* ---------- banned copy ---------- */
   var BANNED = ['missed', 'late', 'adherence', 'PRN', 'failed', 'lost', 'hurry', 'last chance', 'take another', 'you can take', 'safe to take', 'overdue', 'penalty', 'keep your streak', 'save your streak', 'don\'t lose', 'broke'];
+  // v5.5 leaderboard copy adds these (games doc §8.4). Scoped to board/game surfaces: Book prose may say "behind the ridge".
+  var BOARD_BANNED = ['last place', 'bottom', 'behind', 'beat you', 'lost to', 'slowest', 'only'];
   // v5.3: 'streak' is allowed in Campfire copy. Copy must never tie the Campfire to a dose.
   function bannedHits(text) {
     var hits = [];
@@ -457,7 +672,10 @@
   var Engine = {
     dateOf: dateOf, weekday: weekday, weekIndex: weekIndex, stackPhase: stackPhase, fmtDate: fmtDate, fmtDateLong: fmtDateLong, fmtTime: fmtTime, toMins: toMins, WD_LONG: WD_LONG,
     hash: hash, rng: rng, allocate: allocate,
-    SLOTS: SLOTS, slotFor: slotFor, isScheduledOn: isScheduledOn, isPaused: isPaused, doseLabel: doseLabel, taperStepChanged: taperStepChanged,
+    SLOTS: SLOTS, slotFor: slotFor, isScheduledOn: isScheduledOn, occursOn: occursOn, schedOf: schedOf, isAsNeeded: isAsNeeded, itemType: itemType, expandTimes: expandTimes, bossEligible: bossEligible, gameMins: gameMins, hhmm: hhmm,
+    dayOfDate: dayOfDate, dayOfJs: dayOfJs, daysInMonth: daysInMonth, isoDate: isoDate, gameNow: gameNow, timesOn: timesOn, isEnded: isEnded, CLUSTER: CLUSTER,
+    bossDayInWeek: bossDayInWeek, nextBossDay: nextBossDay, nextOccurrenceDay: nextOccurrenceDay, nextOccurrences: nextOccurrences, relDay: relDay, scheduleSentence: scheduleSentence, rangeText: rangeText, migrateItem: migrateItem, ord: ord, WD: WD, MON: MON,
+    recordLabel: recordLabel, amountFor: amountFor, amountShown: amountShown, doseText: doseText, ARCADE: ARCADE, arcadeReward: arcadeReward, drawNightDay: drawNightDay, boardNo: boardNo, isPaused: isPaused, doseLabel: doseLabel, taperStepChanged: taperStepChanged,
     compilePlan: compilePlan, planTotal: planTotal, inWindow: inWindow, WINDOW: WINDOW,
     creditFor: creditFor, journalReward: journalReward, JOURNAL: JOURNAL,
     powerBank: powerBank, nextPowerUp: nextPowerUp, PU_ORDER: PU_ORDER, PU_CAP: PU_CAP,
@@ -469,7 +687,7 @@
     questsFor: questsFor, swapQuest: swapQuest, QUEST_REWARD: QUEST_REWARD,
     BARRIERS: BARRIERS, barrierTier: barrierTier,
     doseStatus: doseStatus, finalizeEntries: finalizeEntries, dayCharge: dayCharge,
-    BANNED: BANNED, bannedHits: bannedHits,
+    BANNED: BANNED, BOARD_BANNED: BOARD_BANNED, bannedHits: bannedHits,
     ROLLOVER: ROLLOVER, gameDayFor: gameDayFor, CAMP: CAMP, GROWTH: GROWTH, isMilestone: isMilestone, milestonesUpTo: milestonesUpTo, MILESTONE_COSMETIC: MILESTONE_COSMETIC, growthStage: growthStage, nextGrowth: nextGrowth, milestoneReward: milestoneReward,
     campBlank: campBlank, campLight: campLight, campEndDay: campEndDay, campRelight: campRelight, relightOffer: relightOffer, campResting: campResting, campLitOn: campLitOn,
     nextMilestone: nextMilestone, restAvailable: restAvailable, campStartRest: campStartRest, campEndRest: campEndRest

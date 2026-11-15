@@ -2,13 +2,20 @@
  * Actions mutate the state and return an "fx" description the UI turns into animation. */
 (function (root) {
   'use strict';
-  var E = root.Engine, R = root.RPG, KEY = 'kindling-v5-state';
+  var E = root.Engine, R = root.RPG;
+  // v5.5 storage: Live and Demo are separate saves, so demo actions never touch real progress. A v5.4 save is not migrated.
+  var KEYS = { live: 'kindling-v55-live', demo: 'kindling-v55-demo', mode: 'kindling-v55-mode' };
+  function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) { } }
+  function lsDel(k) { try { localStorage.removeItem(k); } catch (e) { } }
+  // 'live' (default) | 'demo' | 'pinned' (a QA harness hook: demo clock with no live save behind it, so no "Back to live" chip)
+  function modePref() { var m = lsGet(KEYS.mode); return m === 'demo' || m === 'pinned' ? m : 'live'; }
 
   function blank() {
     return {
-      v: 5, onboarded: false, preset: null, theme: 'expedition', mode: 'meds',
+      v: 55, clockMode: modePref() === 'live' ? 'live' : 'demo', liveMax: null, onboarded: false, preset: null, theme: 'expedition', mode: 'meds',
       comp: { species: 'fox', name: 'Ember', bond: 0 },
-      settings: { simple: false, calm: false, reducedMotion: false, textSize: 'regular', gameNotifs: 1, twoStep: true, discreet: true, sound: true, haptics: true, nudgeMins: 10, appLock: false, reminders: true, campReminder: true },
+      settings: { simple: false, celebrations: true, reducedMotion: false, textSize: 'regular', gameNotifs: 1, twoStep: true, twoStepAsked: false, discreet: true, sound: true, haptics: true, nudgeMins: 10, appLock: false, reminders: true, campReminder: true, boards: true, gameDiff: {} },
       meds: [], day: 1, clock: 480,
       today: null, history: [],
       stars: 0, xp: 0, bank: 0, pu: { magnet: 0, lens: 0, double: 0, lucky: 0 }, puDropped: 0, puSources: {},
@@ -28,12 +35,89 @@
   }
 
   var S = blank();
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* storage unavailable (file:// in some browsers) */ } }
+  function keyFor(st) { return st.clockMode === 'live' ? KEYS.live : KEYS.demo; }
+  function save() { lsSet(keyFor(S), JSON.stringify(S)); }
+  function parse(raw) {
+    try { var o = JSON.parse(raw || 'null'); if (o && o.v === 55) { var b = blank(); var out = Object.assign(b, o); out.settings = Object.assign(blank().settings, o.settings || {}); if (!out.inventory.bag) out.inventory = b.inventory; if (!out.book.pages) out.book = blank().book; return out; } } catch (e) { }
+    return null;
+  }
+  // Boot: load whichever save is active (Live by default). Reload keeps the mode that was active.
   function load() {
-    try { var raw = localStorage.getItem(KEY); if (raw) { var o = JSON.parse(raw); if (o && o.v === 5) { var b = blank(); S = Object.assign(b, o); S.settings = Object.assign(blank().settings, o.settings || {}); if (!S.inventory.bag) S.inventory = b.inventory; if (!S.book.pages) S.book = blank().book; return true; } } } catch (e) { }
+    var m = modePref(), o = parse(lsGet(m === 'live' ? KEYS.live : KEYS.demo));
+    if (o) { S = o; S.clockMode = m === 'live' ? 'live' : 'demo'; return true; }
+    S = blank(); return false;
+  }
+  function reset() { var m = modePref(); lsDel(KEYS.live); lsDel(KEYS.demo); if (m === 'demo') lsSet(KEYS.mode, 'live'); S = blank(); }
+
+  /* ---------- v5.5 Live mode: the real date and clock ----------
+   * Live is the default. Elapsed game days are processed on open, on focus and once a minute (App calls liveSync).
+   * The clock never goes backwards: if the device clock or time zone moves back, the game day is held until real time catches up. */
+  var DEPART = 21 * 60, RETURN = 6 * 60;
+  function isLive() { return S.clockMode === 'live'; }
+  function pinned() { return modePref() === 'pinned'; }
+  function liveNow(date) { return E.gameNow(date || new Date()); }
+  function liveSync(date) {
+    if (!isLive() || !S.onboarded || !S.today) return { changed: false };
+    var n = liveNow(date), stamp = n.day * 2000 + n.clock;
+    if (S.liveMax != null && stamp < S.liveMax) return { changed: false, held: true };
+    S.liveMax = stamp;
+    var rolled = 0, changed = false, start = S.day;
+    while (S.day < n.day) {
+      if (S.day === start) autoDepart(); // the day you last had open: the companion leaves by itself at 9 PM
+      var last = S.day === n.day - 1;
+      rollover({ silent: !last, clock: last ? n.clock : E.ROLLOVER, live: true });
+      rolled++; changed = true;
+    }
+    if (n.clock > S.clock) { S.clock = n.clock; changed = true; }
+    S.flags.seenDay = S.day;
+    if (S.clock >= DEPART && autoDepart()) changed = true;
+    if (changed) save();
+    return { changed: changed, rolled: rolled };
+  }
+  // The recommended quest with "Get ready" defaults. Used for the 9 PM auto-departure.
+  function recommendedQuest() { var best = 'q1', bs = -1; R.QUESTS.forEach(function (q) { var sc = R.score(R.predict(q, compState(), readyLoadout(q.id), regionTier())); if (sc > bs) { bs = sc; best = q.id; } }); return best; }
+  function autoDepart() {
+    if (!S.today || S.trip.status !== 'home' || S.today.tripSent) return false;
+    var r = sendQuest(recommendedQuest()); if (r) { S.trip.auto = true; S.trip.leaves = DEPART; }
+    return !!r;
+  }
+  // Overnight: after 9 PM the companion is out; a quest that came back at the 3:00 rollover shows from 6:00 AM.
+  function tripOvernight() {
+    var tr = S.trip; if (!S.today) return false;
+    if (tr.status === 'out' && S.clock >= DEPART) return true;
+    if (tr.status === 'back' && isLive() && tr.backDay === S.day && S.clock < RETURN) return true;
     return false;
   }
-  function reset() { S = blank(); try { localStorage.removeItem(KEY); } catch (e) { } }
+  /* Demo sandbox: the first demo action copies Live into a separate demo save. Live sits untouched until "Back to live". */
+  function enterDemo() {
+    if (S.clockMode !== 'live') return false;
+    save(); // persist live exactly as it is
+    S = JSON.parse(JSON.stringify(S)); S.clockMode = 'demo';
+    if (modePref() !== 'pinned') lsSet(KEYS.mode, 'demo');
+    save(); return true;
+  }
+  function backToLive(date) {
+    lsSet(KEYS.mode, 'live');
+    var o = parse(lsGet(KEYS.live));
+    S = o || blank(); S.clockMode = 'live';
+    var r = liveSync(date); save(); return { fresh: !o, sync: r };
+  }
+  function startOver() { lsDel(KEYS.live); lsSet(KEYS.mode, 'live'); S = blank(); S.clockMode = 'live'; }
+  function hasLiveSave() { return !!lsGet(KEYS.live); }
+  // Demo "Fresh start": onboarding on the demo clock, in the demo save. Live is untouched.
+  function freshDemo() { lsDel(KEYS.demo); S = blank(); S.clockMode = 'demo'; demoize(); }
+  /* Calendar: fix any past day (within the 400-day history). Rewards follow the existing rules: yesterday's blank or
+   * "not sure" check-in uses backfill (half credit, once); anything else changes the record only. Nothing ever shows "+0". */
+  function editEntry(day, stackId, answer, atMins) {
+    var h = S.history.filter(function (x) { return x.dayNum === day; })[0]; if (!h) return null;
+    var st = h.plan.stacks.filter(function (x) { return x.id === stackId; })[0]; if (!st) return null;
+    var e = h.entries[stackId] || { state: 'none' };
+    if (S.day - day <= 2 && day === (yesterday() || {}).dayNum && (e.state === 'none' || e.state === 'unsure') && !(h.paid && h.paid[stackId]) && (answer === 'took' || answer === 'didnt')) {
+      var r = backfill(stackId, answer); if (r && answer === 'took' && atMins != null) { h.entries[stackId].at = atMins; save(); } return r ? Object.assign({ paid: true }, r) : null;
+    }
+    h.entries[stackId] = { state: answer, at: answer === 'took' ? (atMins != null ? atMins : st.mins) : null, later: true, edited: true, editedOn: S.day };
+    save(); return { paid: false };
+  }
   function nid(p) { return (p || 'x') + (S.seq++); }
 
   /* ---------- day lifecycle ---------- */
@@ -41,14 +125,18 @@
     var plan = E.compilePlan(S.meds, dayNum);
     S.day = dayNum;
     S.clock = clock != null ? clock : Math.max(420, Math.min(plan.stacks[0].mins, 480));
-    S.today = { dayNum: dayNum, plan: plan, entries: {}, credits: {}, charge: 0, prn: [], journalPaid: false, quests: E.questsFor(dayNum), run: null, practiceRuns: 0, tripSent: S.trip.status === 'out', fullShown: false, paid: {}, fed: false, relightPractice: 0 };
+    S.today = { dayNum: dayNum, plan: plan, entries: {}, credits: {}, charge: 0, prn: [], journalPaid: false, quests: E.questsFor(dayNum), run: null, games: {}, paidGames: [], boards: {}, gameDone: false, practiceRuns: 0, tripSent: S.trip.status === 'out', fullShown: false, paid: {}, fed: false, relightPractice: 0 };
   }
   function stackById(id) { return S.today.plan.stacks.filter(function (s) { return s.id === id; })[0]; }
   function medById(id) { return S.meds.filter(function (m) { return m.id === id; })[0]; }
+  // The main card is the check-in that matters now: a pill already out, then one due now, then an older one whose window
+  // passed, then the next upcoming one. (v5.5 round 2: a 9:10 PM evening dose comes before the morning's open question.)
   function openStack() {
-    var st = S.today.plan.stacks;
-    for (var i = 0; i < st.length; i++) { var e = S.today.entries[st[i].id]; if (!e || e.state === 'out') return st[i]; }
-    return null;
+    var st = S.today.plan.stacks, open = [];
+    for (var i = 0; i < st.length; i++) { var e = S.today.entries[st[i].id]; if (!e || e.state === 'out') open.push(st[i]); }
+    if (!open.length) return null;
+    var ph = function (s) { return E.stackPhase(s, S.today.entries[s.id], S.clock); };
+    return open.filter(function (s) { return ph(s) === 'out'; })[0] || open.filter(function (s) { return ph(s) === 'due'; })[0] || open.filter(function (s) { return ph(s) === 'past'; })[0] || open[0];
   }
   function allAnswered() { return !openStack(); }
   function piecesFor() {
@@ -86,7 +174,7 @@
   }
 
   /* ---------- check-ins ---------- */
-  function tick(m) { S.clock = Math.min(S.clock + (m || 2), 1439); }
+  function tick(m) { S.clock = Math.min(S.clock + (m || 2), 1440 + E.ROLLOVER - 1); }
   function catchUpClock(stack) { if (S.clock < stack.mins - 60) S.clock = stack.mins - 2; }
 
   /* Dose state machine (strict): none -> out -> answered;  none -> answered;  out -> none (put back).
@@ -128,7 +216,7 @@
     S.today.paid[stackId] = true; // ledger: one reward set per dose per day
     S.today.entries[stackId] = { state: answer, at: at, outAt: prev && prev.outAt, later: !!opts.later || loggedLater, loggedLater: loggedLater, loggedAt: loggedLater ? S.clock : undefined, timeUnsure: !!opts.timeUnsure };
     S.today.credits[stackId] = cr;
-    var label = (st.kind === 'rest' ? 'Your rest-day check-in' : st.kind === 'journal' ? 'Your journal check-in' : 'Your ' + st.label.toLowerCase() + ' stack');
+    var label = (st.kind === 'rest' ? 'Your rest-day check-in' : st.kind === 'journal' ? 'Your journal check-in' : 'Your ' + st.label.toLowerCase() + ' check-in');
     addStars(cr.stars + cr.onTimeStars);
     addXp(cr.xp);
     // v5.4: every honest same-day answer pays the same flat companion XP (its share of 40 a day), whatever the answer.
@@ -136,7 +224,7 @@
     S.comp.bond += cr.bond; if (cr.checkin) S.life.checkins++;
     S.today.charge = E.dayCharge(S.today.plan, S.today.credits);
     var drops = cr.charge ? addCharge(cr.charge, label) : [];
-    var q = cr.checkin ? questDone('checkin') : null;
+    var q = null; // v5.5 round 2: the check-in isn't a goal any more (the hero already asks for it)
     S.flags.lastActiveDay = S.day;
     var full = S.today.charge >= 100 && !S.today.fullShown;
     if (full) S.today.fullShown = true;
@@ -157,7 +245,10 @@
   }
 
   /* ---------- weekly headline: one Gold chest per week for everyone (Boss Day for weekly meds, "Load the week" otherwise) ---------- */
-  function hasWeekly() { return S.meds.some(function (m) { return m.kind === 'weekly' && !m.paused; }); }
+  // F-6: decided per week. A Boss Day in this Mon-Sun week makes the headline "Beat the Boss"; otherwise "Load the week".
+  function bossDayThisWeek() { return E.bossDayInWeek(S.meds, E.weekIndex(S.day)); }
+  function hasWeekly() { return bossDayThisWeek() != null; }
+  function nextBossDay() { return E.nextBossDay(S.meds, S.day + 1); }
   function headlineDone() { return !!(S.weekDone && S.weekDone[E.weekIndex(S.day)]); }
   function completeHeadline(kind) {
     S.weekDone = S.weekDone || {};
@@ -209,35 +300,65 @@
     var cr = E.creditFor(st, answer, { mode: 'backfill' });
     y.entries[stackId] = { state: answer, at: st.mins, later: true, backfilled: true };
     addStars(cr.stars); addXp(cr.xp); S.comp.bond += cr.bond;
-    var drops = cr.charge ? addCharge(cr.charge, 'Yesterday’s ' + st.label.toLowerCase() + ' stack') : [];
+    var drops = cr.charge ? addCharge(cr.charge, 'Yesterday’s ' + st.label.toLowerCase() + ' check-in') : [];
     save(); return { credit: cr, drops: drops };
   }
 
-  /* ---------- Run ---------- */
-  function finishRun(result, practice) {
+  /* ---------- v5.5 daily games (the Trail, the word game, the memory game) ----------
+   * Each game pays once a day; the first paying game brings the chest, the one Grand Draw ticket and lights the Campfire.
+   * Games never read doses, Spark or the record (dose-blind). Power-ups only ever change Finds. */
+  function gameKey(game, diff) { var d = diff === 'stroll' ? 'easy' : diff === 'trek' ? 'normal' : diff === 'summit' ? 'hard' : (diff || 'easy'); return game + '|' + d; }
+  function finishGame(result, practice, opts) {
     if (!S.today) return { practice: true };
-    if (practice || S.today.run) {
-      S.today.practiceRuns++;
-      if (S.today.run && E.relightOffer(S.camp, S.day)) S.today.relightPractice++;
+    result = result || {}; opts = opts || {};
+    // A board started before the 3:00 rollover belongs to a day that has ended: it counts as practice, never today's board.
+    if (opts.day != null && opts.day !== S.day) { S.today.practiceRuns++; save(); return { practice: true, staleDay: true }; }
+    var t = S.today, game = result.game || 'trail';
+    t.games = t.games || {}; t.paidGames = t.paidGames || []; t.boards = t.boards || {};
+    var key = gameKey(game, result.difficulty);
+    var isPractice = !!practice || result.mode === 'practice' || result.difficulty === 'practice' || !!t.boards[key];
+    if (isPractice) {
+      t.practiceRuns++;
+      if (t.gameDone && E.relightOffer(S.camp, S.day)) t.relightPractice++;
       var rl = tryRelight();
       save(); return { practice: true, relight: rl };
     }
-    var rw = E.runReward(result, { practice: false, alreadyPlayed: false });
-    S.today.run = { stars: result.stars || 0, shareText: result.shareText || '', routeGrid: result.routeGrid || null, stepsUsed: result.stepsUsed, stepsMax: result.stepsMax, finds: result.finds || [] };
-    addStars(rw.stars); addXp(rw.xp); var lv = compXp(R.runXp(result.stars || 0));
-    S.life.runs++;
-    (result.finds || []).forEach(function (f) { if (f && f.id && E.FIND_BY_ID[f.id]) addFind(f.id); else if (f) addFind(normalizeFind(f)); });
-    consumePowerUps(result.powerUpsUsed);
-    // Kid profiles: deterministic rewards only, so the Run pays a fixed Find instead of a random chest.
-    var chestId = null;
-    if (isKid()) addFind(E.FINDS.filter(function (f) { return !S.owned[f.id]; }).concat(E.FINDS)[0].id);
-    else { chestId = nid('ch'); S.chests.push({ id: chestId, type: rw.chest, source: 'run', day: S.day, opened: false }); }
-    S.tickets += rw.ticket; S.ticketDays.push(S.day);
-    var q1 = questDone('run'), q2 = (result.stars || 0) >= 2 ? questDone('run2') : null;
+    var rw = E.arcadeReward(game, result, { paidGames: t.paidGames, isKid: isKid() });
+    var stars = result.stars || 0;
+    // Game-only facts for the (simulated) leaderboard: never finds, power-ups or anything from the record.
+    var boardResult = { game: game, puzzleNo: result.puzzleNo, seed: result.seed, difficulty: key.split('|')[1], mode: result.mode === 'ranked' ? 'ranked' : 'relaxed', stars: stars, score: result.score || null, pausedMs: result.pausedMs || 0 };
+    t.boards[key] = { stars: stars, score: result.score || null, mode: boardResult.mode, paid: rw.paid, result: boardResult };
+    if (root.Arcade && typeof root.Arcade.toBoardEntry === 'function') { try { var be = root.Arcade.toBoardEntry(boardResult); if (be) { S.boardHistory = (S.boardHistory || []).concat([be]).slice(-200); } } catch (e) { } }
+    if (!t.games[game]) t.games[game] = { stars: stars, difficulty: key.split('|')[1], score: result.score || null, shareText: result.shareText || '', paid: rw.paid };
+    if (game === 'trail' && !t.run) t.run = { stars: stars, shareText: result.shareText || '', routeGrid: result.routeGrid || null, stepsUsed: result.stepsUsed, stepsMax: result.stepsMax, finds: result.finds || [] };
+    t.gameDone = true;
+    var lv = 0, chestId = null;
+    if (rw.paid) {
+      t.paidGames.push(game);
+      addStars(rw.stars); addXp(rw.xp); lv = compXp(rw.first ? R.runXp(stars) : rw.compXp);
+      S.life.runs++;
+      (result.finds || []).forEach(function (f) { if (f && f.id && E.FIND_BY_ID[f.id]) addFind(f.id); else if (f) addFind(normalizeFind(f)); });
+      if (rw.diffFind) addFind(normalizeFind({ id: 'diff-' + game + '-' + S.day, rarity: rw.diffFind }));
+      consumePowerUps(result.powerUpsUsed);
+      if (rw.first) {
+        // Kid profiles: deterministic rewards only, so the first game pays a fixed Find instead of a random chest.
+        if (isKid()) addFind(E.FINDS.filter(function (f) { return !S.owned[f.id]; }).concat(E.FINDS)[0].id);
+        else if (rw.chest) { chestId = nid('ch'); S.chests.push({ id: chestId, type: rw.chest, source: game === 'trail' ? 'run' : 'game', day: S.day, opened: false }); }
+        S.tickets += rw.ticket; S.ticketDays.push(S.day);
+      }
+    }
+    var distinct = Object.keys(t.boards).map(function (k) { return k.split('|')[0]; }).filter(function (g, i, a) { return a.indexOf(g) === i; });
+    var q1 = distinct.length >= 2 ? questDone('two') : null, q2 = null;
     S.flags.lastActiveDay = S.day;
-    var camp = light('run');
+    var camp = rw.lights ? light('game') : null;
     save();
-    return { camp: camp, reward: rw, chestId: chestId, levelUp: lv || (q1 && q1.levelUp) || (q2 && q2.levelUp) || 0, quests: [q1, q2].filter(Boolean).map(function (x) { return x.quest; }) };
+    return { camp: camp, reward: rw, chestId: chestId, game: game, paid: rw.paid, levelUp: lv || (q1 && q1.levelUp) || (q2 && q2.levelUp) || 0, quests: [q1, q2].filter(Boolean).map(function (x) { return x.quest; }) };
+  }
+  // v5.4 name: the Trail is one of the three daily games now. A second Trail finish the same day is practice.
+  function finishRun(result, practice) {
+    var r = Object.assign({}, result || {}); r.game = 'trail';
+    if (!practice && S.today && S.today.run && !r.difficulty) practice = true;
+    return finishGame(r, practice);
   }
   function normalizeFind(f) {
     var rar = f.rarity && E.RARITIES.indexOf(f.rarity) >= 0 ? f.rarity : 'common';
@@ -342,7 +463,7 @@
     var finds = qFinds.concat(extra).sort(function (a, b) { return E.rarityRank(b.rarity) - E.rarityRank(a.rarity); });
     var haul = { finds: finds, stars: base.stars + prov.stars, xp: 20, compXp: R.XP.quest, powerUp: powerUp, silver: prov.silver, boost: false,
       gear: base.gear, base: { finds: base.finds, stars: base.stars }, provisions: { finds: prov.finds, stars: prov.stars }, packed: tr.packed ? { type: tr.packed.type, source: tr.packed.source, finds: pk.finds, bump: pk.bump } : null };
-    S.trip = { status: 'back', dest: tr.dest || destForQuest(qid), quest: qid, loadout: lo, comp: cs, tier: tier, results: results, haul: haul, fromDay: S.day, leftDay: tr.leftDay };
+    S.trip = { status: 'back', dest: tr.dest || destForQuest(qid), quest: qid, loadout: lo, comp: cs, tier: tier, results: results, haul: haul, fromDay: S.day, backDay: S.day + 1, leftDay: tr.leftDay };
   }
   // Simple view: the user can choose to spend one power-up on the haul from the postcard (their action, their spend)
   function boostTrip() {
@@ -397,13 +518,15 @@
   function buyDecor(id, cost) { if (S.stars < cost || S.decorOwned.indexOf(id) >= 0) return false; S.stars -= cost; S.decorOwned.push(id); save(); return true; }
   function placeDecor(slot, id) { S.placed[slot] = id; var q = questDone('place'); save(); return { quest: q && q.quest }; }
 
+  var HISTORY_DAYS = 400; // v5.5: the calendar keeps 400 days
   /* ---------- rollover (3:00 local) : record finalized, Charge delivered with the companion, fresh Core ---------- */
   function rollover(opts) {
     opts = opts || {};
     var t = S.today;
     var entries = E.finalizeEntries(t.plan, t.entries);
-    S.history.push({ dayNum: t.dayNum, plan: { stacks: t.plan.stacks.map(function (s) { return { id: s.id, label: s.label, mins: s.mins, kind: s.kind, value: s.value, stars: s.stars, xp: s.xp, onTime: s.onTime, doses: s.doses }; }) }, entries: entries, prn: t.prn.slice(), charge: t.charge, run: t.run ? { stars: t.run.stars } : null });
-    if (S.history.length > 40) S.history.shift();
+    // The day snapshot is written once and never recomputed from the current schedule (edits never rewrite the past).
+    S.history.push({ dayNum: t.dayNum, plan: { rest: !!t.plan.rest, journal: !!t.plan.journal, stacks: t.plan.stacks.map(function (s) { return { id: s.id, group: s.group, label: s.label, mins: s.mins, kind: s.kind, value: s.value, stars: s.stars, xp: s.xp, onTime: s.onTime, doses: s.doses, boss: s.boss }; }) }, entries: entries, prn: t.prn.slice(), charge: t.charge, run: t.run ? { stars: t.run.stars } : null, notes: t.notes || null });
+    if (S.history.length > HISTORY_DAYS) S.history.shift();
     // Trip: only a Trip that actually left comes back. An unopened haul waits (never lost, never duplicated).
     // On an active day the companion heads out by itself if you didn't pick a spot; idle days send nobody (P8).
     var active = S.flags.lastActiveDay === t.dayNum;
@@ -437,7 +560,7 @@
 
 
   /* ---------- v5.3 Campfire + companion growth ----------
-   * light(): the ONLY way the count moves up. Called from finishRun (real Run) and feed(). Never from check-ins. */
+   * light(): the ONLY way the count moves up. Called from finishGame (any daily game) and feed(). Never from check-ins. */
   function isKid() { return !!(S.profile && S.profile.kid); }
   function campOn() { return !isKid(); }
   function light(source) {
@@ -454,7 +577,7 @@
   function addCosmetic(id) { S.cosmetics = S.cosmetics || []; if (S.cosmetics.indexOf(id) < 0) S.cosmetics.push(id); }
   function tryRelight() {
     if (!S.today || !E.relightOffer(S.camp, S.day)) return null;
-    var r = E.campRelight(S.camp, S.day, { kid: isKid(), runDone: !!S.today.run, practiceDone: S.today.relightPractice > 0 });
+    var r = E.campRelight(S.camp, S.day, { kid: isKid(), runDone: !!(S.today.run || S.today.gameDone), practiceDone: S.today.relightPractice > 0 });
     if (!r.fx.relit) return null;
     S.camp = r.camp; r.fx.chests = [];
     r.fx.milestones.forEach(function (m) { r.fx.chests.push(addChest(m.chest, 'campfire-' + m.n)); if (m.cosmetic) addCosmetic(m.cosmetic); });
@@ -485,7 +608,7 @@
       // The refill quest dissolves into an assistance card and is swapped for a quest of EQUAL value (+40),
       // so answering the help question never pays less than skipping it. The barrier itself earns nothing.
       var med = medById(medId);
-      if (med && med.kind !== 'prn' && med.supply != null && med.supply <= 7) {
+      if (med && !E.isAsNeeded(med) && med.supply != null && supplyLeft(med) <= 7) {
         var rq = careQuest(medId, 'refill');
         if (!rq.done && !rq.dissolved) { rq.dissolved = true; careQuest(medId, 'swap'); res.swapped = 'refill'; }
       }
@@ -509,17 +632,99 @@
     var q = careQuest(medId, kind); if (q.done || q.dissolved) return null;
     if (kind === 'refill' && S.today && S.today.paid['care-refill-' + medId]) return null;
     q.done = true; q.doneDay = S.day; addStars(CARE_REWARD.stars); addXp(CARE_REWARD.xp);
-    var m = medById(medId); if (kind === 'refill' && m) m.supply = (m.supply || 0) + 30;
+    var m = medById(medId); if (kind === 'refill' && m) { m.supply = (supplyLeft(m) || 0) + 30; m.supplySetOn = S.day; }
     save(); return { reward: CARE_REWARD };
   }
 
-  /* ---------- med editing (takes effect from tomorrow; today's plan is locked) ---------- */
+  /* ---------- v5.5 items: medicines, vitamins and habits share one model and one editor ----------
+   * S5: a new item starts TODAY if one of its times is still ahead. What's already logged and earned stays exactly as it
+   * is; only the remaining value is re-split across the check-ins still open, so the day still totals 100.
+   * Edits apply from now on the same way and never rewrite a past day (history snapshots are never recompiled). */
   function upsertMed(med) {
     var i = S.meds.map(function (m) { return m.id; }).indexOf(med.id);
-    if (i >= 0) S.meds[i] = med; else { med.id = med.id || nid('m'); S.meds.push(med); }
+    if (i >= 0) S.meds[i] = med; else { med.id = med.id || nid('m'); if (med.createdDay == null) med.createdDay = S.day; S.meds.push(med); }
     save(); return med;
   }
-  function setPaused(medId, paused) { var m = medById(medId); if (!m) return; m.paused = paused; m.pausedFrom = paused ? S.day + 1 : null; save(); }
+  function itemStartsToday(item) {
+    if (!S.today) return false;
+    var s = E.schedOf(item);
+    if (E.isAsNeeded(item)) return true;
+    if (s.start != null && s.start !== S.day) return false;
+    var probe = JSON.parse(JSON.stringify(item)); probe.schedule = JSON.parse(JSON.stringify(s)); probe.schedule.start = S.day; probe.startMins = S.clock;
+    return E.occursOn(probe, S.day) && E.timesOn(probe, S.day).length > 0;
+  }
+  // Add or edit through the one editor. Returns { item, today: bool, firstNext: {day,mins,label}|null }.
+  function saveItem(item, opts) {
+    opts = opts || {};
+    var isNew = !S.meds.some(function (m) { return m.id === item.id; });
+    item.schedule = item.schedule || E.schedOf(item);
+    if (isNew) {
+      if (item.schedule.start == null || item.schedule.start <= S.day) {
+        if (itemStartsToday(item)) { item.schedule.start = S.day; item.startMins = S.clock; }
+        else if (item.schedule.start == null || item.schedule.start < S.day + 1) { item.schedule.start = S.day + 1; delete item.startMins; }
+      }
+      if (item.schedule.end != null && item.schedule.end < item.schedule.start) item.schedule.end = item.schedule.start;
+      if (item.supply != null) item.supplySetOn = S.day;
+    } else {
+      var prev = medById(item.id);
+      if (prev && prev.supply !== item.supply) item.supplySetOn = S.day;
+      if (item.schedule.start != null && item.schedule.start < S.day && prev && E.schedOf(prev).start !== item.schedule.start) item.schedule.start = S.day;
+      if (item.schedule.start == null) item.schedule.start = S.day; // a new pattern counts from the day of the edit
+      if (prev && prev.startMins != null && E.schedOf(prev).start === S.day && item.schedule.start === S.day) item.startMins = prev.startMins; else delete item.startMins;
+    }
+    if (item.type === 'habit') { delete item.supply; delete item.highRisk; item.strength = ''; }
+    upsertMed(item);
+    var changed = replanToday();
+    var nx = E.nextOccurrences(item, S.day, S.clock, 1)[0] || null;
+    save();
+    return { item: item, isNew: isNew, today: changed && E.occursOn(item, S.day) && E.timesOn(item, S.day).length > 0, firstNext: nx };
+  }
+  /* replanToday: recompile today's plan from the current items without touching anything already answered.
+   * Answered (or pill-out) check-ins keep their exact value; the rest of the 100 is split across the open ones. */
+  function replanToday() {
+    var t = S.today; if (!t) return false;
+    var fresh = E.compilePlan(S.meds, S.day), old = t.plan;
+    var locked = old.stacks.filter(function (st) { return t.entries[st.id] || t.paid[st.id]; });
+    if (!locked.length) { t.plan = fresh; t.charge = E.dayCharge(t.plan, t.credits); return true; }
+    var lockedIds = locked.map(function (x) { return x.id; });
+    var used = function (k) { return locked.reduce(function (a, st) { return a + (st[k] || 0); }, 0); };
+    // P0 fix (v5.5 round 2): a dose's identity is the item plus its slot (its 1st, 2nd... dose of the day), never its clock
+    // time. A slot already answered today stays answered; changing its time applies from tomorrow.
+    var slotKeys = function (stacks) { var n = {}, out = []; stacks.slice().sort(function (a, b) { return a.mins - b.mins; }).forEach(function (st) { (st.doses || []).slice().sort(function (a, b) { return (a.mins || st.mins) - (b.mins || st.mins); }).forEach(function (d) { n[d.medId] = (n[d.medId] || 0) + 1; out.push({ st: st, d: d, key: d.medId + '#' + n[d.medId] }); }); }); return out; };
+    var lockedSet = {}; locked.forEach(function (st) { lockedSet[st.id] = 1; });
+    var loggedDoses = {}; slotKeys(old.stacks).forEach(function (x) { if (lockedSet[x.st.id]) loggedDoses[x.key] = 1; });
+    var freshKeys = {}; slotKeys(fresh.stacks).forEach(function (x) { freshKeys[x.st.id + '|' + x.d.medId + '|' + x.d.mins] = x.key; });
+    var open = [];
+    fresh.stacks.forEach(function (st) {
+      if (st.kind !== 'dose') return; // a rest/journal day that's already answered stays answered
+      var doses = st.doses.filter(function (d) { return !loggedDoses[freshKeys[st.id + '|' + d.medId + '|' + d.mins]]; });
+      if (!doses.length) return;
+      var id = st.id; while (lockedIds.indexOf(id) >= 0 || open.some(function (o) { return o.id === id; })) id += 'b';
+      open.push(Object.assign({}, st, { id: id, doses: doses, mins: doses[0].mins, boss: doses.some(function (d) { return d.weekly; }) }));
+    });
+    if (!open.length) return false;
+    var v = E.allocate(Math.max(0, 100 - used('value')), open.length), s = E.allocate(Math.max(0, 80 - used('stars')), open.length),
+        x = E.allocate(Math.max(0, 80 - used('xp')), open.length), o = E.allocate(Math.max(0, 20 - used('onTime')), open.length);
+    open.forEach(function (st, i) { st.value = v[i]; st.stars = s[i]; st.xp = x[i]; st.onTime = o[i]; });
+    var stacks = locked.concat(open).sort(function (a, b) { return a.mins - b.mins; });
+    t.plan = { dayNum: S.day, stacks: stacks, rest: false, journal: false, boss: stacks.some(function (z) { return z.boss; }), prn: fresh.prn, locked: true, replanned: true };
+    t.charge = E.dayCharge(t.plan, t.credits);
+    return true;
+  }
+  function setPaused(medId, paused) { var m = medById(medId); if (!m) return; m.paused = paused; m.pausedFrom = paused ? S.day + 1 : null; if (!paused) m.pausedUntil = null; save(); }
+  // "Stop tracking": the item ends from tomorrow. It is never deleted, so the calendar keeps its history.
+  function stopTracking(medId) { var m = medById(medId); if (!m) return; m.ended = S.day + 1; save(); }
+  // Supply counts down from the day it was set (P1): "About N days left" everywhere comes from here.
+  // v5.5 round 2: supply is days' worth of *scheduled use*, so it only counts down on days the item was due (a monthly shot
+  // doesn't drop every day; as needed doesn't count down on a clock at all).
+  function supplyLeft(item) {
+    if (!item || item.supply == null) return null;
+    if (E.isAsNeeded(item)) return item.supply;
+    var from = item.supplySetOn != null ? item.supplySetOn : S.day, used = 0;
+    for (var d = from; d < S.day; d++) if (E.occursOn(item, d)) used++;
+    return Math.max(0, item.supply - used);
+  }
+  function activeItems() { return S.meds.filter(function (m) { return !E.isEnded(m, S.day); }); }
 
   /* ---------- fake Run result (used for simulation and when the Run module is missing) ---------- */
   function fakeRunResult(seed, opts) {
@@ -569,13 +774,13 @@
         { id: 'h3', name: 'Metformin', strength: '500 mg', kind: 'multi', times: ['08:00', '12:00', '18:00'], color: '#ffffff', shape: 'oval', supply: 18 },
         { id: 'h4', name: 'Prednisone', kind: 'taper', times: ['08:00'], color: '#fff3b0', shape: 'round', supply: 20, steps: [{ fromDay: 1, label: '40 mg' }, { fromDay: 8, label: '30 mg' }, { fromDay: 15, label: '20 mg' }, { fromDay: 22, label: '10 mg' }], endDay: 28 },
         { id: 'h5', name: 'Aspirin', strength: '81 mg', kind: 'daily', times: ['08:00'], color: '#ffb0a8', shape: 'round', supply: 60 },
-        { id: 'h6', name: 'Vitamin D', strength: '1000 IU', kind: 'daily', times: ['08:00'], color: '#ffd166', shape: 'oval', supply: 80 },
-        { id: 'h7', name: 'Calcium', strength: '600 mg', kind: 'daily', times: ['12:00'], color: '#eeeeee', shape: 'oval', supply: 45 },
+        { type: 'vitamin', id: 'h6', name: 'Vitamin D', strength: '1000 IU', kind: 'daily', times: ['08:00'], color: '#ffd166', shape: 'oval', supply: 80 },
+        { type: 'vitamin', id: 'h7', name: 'Calcium', strength: '600 mg', kind: 'daily', times: ['12:00'], color: '#eeeeee', shape: 'oval', supply: 45 },
         { id: 'h8', name: 'Atorvastatin', strength: '20 mg', kind: 'daily', times: ['18:00'], color: '#9ad0f5', shape: 'oval', supply: 25 },
         { id: 'h9', name: 'Metoprolol', strength: '25 mg', kind: 'daily', times: ['18:00'], color: '#f7a6c8', shape: 'round', supply: 5 },
         { id: 'h10', name: 'Warfarin', strength: '5 mg', kind: 'daily', times: ['18:00'], color: '#ffc4a3', shape: 'round', supply: 30, highRisk: true },
         { id: 'h11', name: 'Tamsulosin', strength: '0.4 mg', kind: 'daily', times: ['21:30'], color: '#b4e3a7', shape: 'capsule', supply: 28 },
-        { id: 'h12', name: 'Melatonin', strength: '3 mg', kind: 'daily', times: ['21:30'], color: '#d7c8ff', shape: 'round', supply: 50 },
+        { type: 'vitamin', id: 'h12', name: 'Melatonin', strength: '3 mg', kind: 'daily', times: ['21:30'], color: '#d7c8ff', shape: 'round', supply: 50 },
         { id: 'h13', name: 'Nitroglycerin', strength: '0.4 mg', kind: 'prn', times: [], color: '#fff', shape: 'round', note: '' },
         { id: 'h14', name: 'Acetaminophen', strength: '500 mg', kind: 'prn', times: [], color: '#fff', shape: 'oval' }
       ];
@@ -589,7 +794,7 @@
   }
   function loadPreset(name) {
     var keepTheme = S.theme;
-    S = blank(); S.onboarded = true; S.preset = name;
+    S = blank(); demoize(); S.onboarded = true; S.preset = name;
     S.meds = baseMeds(name);
     var target = 2, policy = {}, theme = 'expedition', comp = { species: 'fox', name: 'Ember' };
     if (name === 'logan') { target = 2; comp = { species: 'fox', name: 'Ember' }; S.settings.twoStep = true; }
@@ -617,32 +822,44 @@
   }
 
   /* ---------- onboarding completion ---------- */
+  /* o: { theme, comp, item (from the ItemEditor), twoStep, chestResult, now (a Date in Live mode) }. Live onboarding starts
+   * on the real date and clock; the demo clock starts on day 1 at 8:00 AM as before. */
   function finishOnboarding(o) {
-    var keep = { theme: o.theme, comp: o.comp, settings: S.settings };
-    S = blank(); S.onboarded = true; S.preset = 'onboarded';
+    var keep = { theme: o.theme, comp: o.comp, settings: S.settings, clockMode: S.clockMode };
+    S = blank(); S.onboarded = true; S.preset = 'onboarded'; S.clockMode = keep.clockMode || S.clockMode;
     S.theme = keep.theme; S.comp = { species: keep.comp.species, name: keep.comp.name, bond: 2 };
-    S.settings = Object.assign(S.settings, keep.settings, { twoStep: !!o.twoStep });
-    S.mode = o.mode;
-    S.meds = [{ id: 'm1', name: o.medName || (o.mode === 'habits' ? 'Vitamin' : 'My morning med'), strength: '', kind: 'daily', times: [o.time || '08:00'], color: o.mode === 'habits' ? '#ffd166' : '#f6a04d', shape: o.mode === 'habits' ? 'oval' : 'capsule', supply: 21, twoStep: !!o.twoStep }];
-    startDay(1, 480);
+    S.settings = Object.assign(S.settings, keep.settings, { twoStep: !!o.twoStep, twoStepAsked: true });
+    var n = o.now ? E.gameNow(o.now) : { day: 1, clock: 480 };
+    var item = o.item ? JSON.parse(JSON.stringify(o.item)) : { name: o.medName || 'My morning med', type: o.mode === 'habits' ? 'vitamin' : 'med', strength: '', schedule: { pattern: { kind: 'daily' }, times: { mode: 'list', list: [o.time || '08:00'] }, start: null, end: null, doseSteps: null } };
+    item.id = 'm1'; item.createdDay = n.day; item.twoStep = item.type === 'habit' ? false : !!o.twoStep;
+    if (item.type === 'med' && item.supply === undefined) item.supply = 30;
+    if (item.supply != null) item.supplySetOn = n.day;
+    item.schedule = item.schedule || E.schedOf(item);
+    // The onboarding item starts today; in Live mode only its times still ahead count today (S5).
+    item.schedule.start = n.day; delete item.startMins; // v5.5 round 2: the first item always starts today, past slots included
+    S.meds = [item];
+    S.day = n.day; S.clock = n.clock;
+    startDay(n.day, n.clock);
+    if (o.now) S.liveMax = n.day * 2000 + n.clock;
     // tutorial rewards (practice: nothing recorded in the health record)
     addXp(80); addStars(80); compXp(R.XP.welcome);
     S.inventory.bag = ['compass']; S.inventory.equipped = { tool: 'compass', garb: null, trinket: null };
-    if (o.chestResult) { o.chestResult.finds.forEach(function (f) { addFind(f.id); }); addStars(o.chestResult.stars); S.chests.push({ id: nid('ch'), type: 'bronze', source: 'first', day: 1, opened: true, openedDay: 1, result: { finds: o.chestResult.finds, stars: o.chestResult.stars } }); }
+    if (o.chestResult) { o.chestResult.finds.forEach(function (f) { addFind(f.id); }); addStars(o.chestResult.stars); S.chests.push({ id: nid('ch'), type: 'bronze', source: 'first', day: n.day, opened: true, openedDay: n.day, result: { finds: o.chestResult.finds, stars: o.chestResult.stars } }); }
     addPowerUp('magnet', 'Your practice catch');
     S.puDropped = 1;
-    S.trip = { status: 'out', dest: o.dest, leftDay: 1 };
+    S.trip = { status: 'out', dest: o.dest, leftDay: n.day };
     S.today.tripSent = true;
-    S.flags.lastActiveDay = 1;
+    S.flags.lastActiveDay = n.day; S.flags.seenDay = n.day;
     save();
   }
+  function demoize() { S.clockMode = 'demo'; if (modePref() === 'live') lsSet(KEYS.mode, 'demo'); }
 
   /* ---------- v5.4 demo jumps: build a believable day-N state through the same engine (moderate player, est.) ---------- */
   var SAMPLE_WEEK = [['q1', 0], ['q2', 1], ['q3', 0], ['q1', 2], ['q2', 0], ['q3', 1], ['q1', 1]];
   function jumpTo(n) {
     var keepSpine = (S.book.pages.filter(function (p) { return p.kind === 'spine' && p.ch === 1; })[0] || {}).choice;
     var keep = { theme: S.theme, comp: S.comp, settings: S.settings, meds: S.meds.length ? S.meds : baseMeds('logan'), preset: S.preset, fork: S.rpg.fork, kid: isKid() };
-    S = blank(); S.onboarded = true; S.preset = keep.preset || 'logan';
+    S = blank(); demoize(); S.onboarded = true; S.preset = keep.preset || 'logan';
     S.theme = keep.theme; S.comp = keep.comp; S.settings = keep.settings; S.meds = keep.meds; S.profile.kid = keep.kid;
     var played = n - 1; // every day before today was played; today lights on the first Feed or Run
     S.compLevel.xp = 130 * played + R.XP.welcome; S.compLevel.level = R.levelInfo(S.compLevel.xp).level;
@@ -692,7 +909,8 @@
     finishRun: finishRun, addChest: addChest, openChest: openChest, sendTrip: sendTrip, openTrip: openTrip,
     buyDecor: buyDecor, placeDecor: placeDecor, rollover: rollover, claimWelcome: claimWelcome,
     answerBarrier: answerBarrier, careQuest: careQuest, completeCareQuest: completeCareQuest, CARE_REWARD: CARE_REWARD,
-    upsertMed: upsertMed, setPaused: setPaused, fakeRunResult: fakeRunResult, autoplayDay: autoplayDay,
+    upsertMed: upsertMed, saveItem: saveItem, replanToday: replanToday, itemStartsToday: itemStartsToday, stopTracking: stopTracking, supplyLeft: supplyLeft, activeItems: activeItems, setPaused: setPaused,
+    finishGame: finishGame, gameKey: gameKey, isLive: isLive, pinned: pinned, liveNow: liveNow, liveSync: liveSync, enterDemo: enterDemo, freshDemo: freshDemo, editEntry: editEntry, backToLive: backToLive, startOver: startOver, hasLiveSave: hasLiveSave, KEYS: KEYS, DEPART: DEPART, RETURN: RETURN, tripOvernight: tripOvernight, autoDepart: autoDepart, recommendedQuest: recommendedQuest, bossDayThisWeek: bossDayThisWeek, nextBossDay: nextBossDay, demoize: demoize, HISTORY_DAYS: HISTORY_DAYS, fakeRunResult: fakeRunResult, autoplayDay: autoplayDay,
     loadPreset: loadPreset, finishOnboarding: finishOnboarding,
     light: light, feed: feed, tryRelight: tryRelight, startRest: startRest, endRest: endRest, growth: growth, isKid: isKid, campOn: campOn, FEED: FEED, addPowerUp: addPowerUp, completeHeadline: completeHeadline, headlineDone: headlineDone, hasWeekly: hasWeekly, boostTrip: boostTrip, addCharge: addCharge, addStars: addStars, addXp: addXp, questDone: questDone, addFind: addFind,
     // v5.4 companion RPG

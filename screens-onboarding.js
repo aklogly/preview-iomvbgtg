@@ -1,21 +1,25 @@
 /* Kindling v5 — screens-onboarding.js : ~2 minutes to the aha. No account wall.
- * world -> companion -> what to remember -> "ever wonder if you took it?" -> practice catch -> tutorial Run -> first chest -> Trip leaves -> Today */
+ * world -> companion -> ItemEditor (What is it? · When? · Review) -> "ever wonder if you took it?" (not for habits)
+ * -> practice catch -> practice board -> first chest -> the companion's first quest -> Today.
+ * v5.5: the item step is the SAME ItemEditor used by "+ Add" and "Edit". Calm mode is gone from the world picker. */
 (function (root) {
   'use strict';
   var E = root.Engine, St = root.Store, A = root.Art, U = root.UI, Th = root.Theme, esc = U.esc;
   var ob;
-  var OBKEY = 'kindling-v5-ob';
-  function initial() { return { active: true, step: 0, theme: 'expedition', species: null, name: '', mode: 'meds', medName: '', time: '08:00', twoStep: true, practice: 'idle', dest: null }; }
+  var OBKEY = 'kindling-v55-ob';
+  var NAMES = ['welcome', 'world', 'buddy', 'ie1', 'ie2', 'ie3', 'wonder', 'practice', 'run', 'chest', 'trip'];
+  var CHEST = NAMES.indexOf('chest');
+  function initial() { return { active: true, step: 0, theme: 'expedition', species: null, name: '', item: null, twoStep: true, practice: 'idle', dest: null }; }
   function reset() { ob = initial(); try { localStorage.removeItem(OBKEY); } catch (e) { } }
   ob = initial();
   // Resume onboarding where it stopped after a reload (steps before the first real chest only)
-  try { var saved = JSON.parse(localStorage.getItem(OBKEY) || 'null'); if (saved && saved.active && saved.step > 0 && saved.step < 7) { ob = saved; if (ob.practice === 'out') ob.practice = 'idle'; } } catch (e) { }
-  function persist() { try { if (ob.active && ob.step < 7) localStorage.setItem(OBKEY, JSON.stringify(ob)); else localStorage.removeItem(OBKEY); } catch (e) { } }
+  try { var saved = JSON.parse(localStorage.getItem(OBKEY) || 'null'); if (saved && saved.active && saved.step > 0 && saved.step < CHEST) { ob = saved; if (ob.practice === 'out') ob.practice = 'idle'; } } catch (e) { }
+  function persist() { try { if (ob.active && ob.step < CHEST) localStorage.setItem(OBKEY, JSON.stringify(ob)); else localStorage.removeItem(OBKEY); } catch (e) { } }
   function th() { return root.THEMES[ob.theme]; }
   function compDef() { return Th.companionDef(th(), ob.species || th().companions[0].id); }
-  var STEPS = 8;
+  var STEPS = 9;
 
-  function progress() { var h = '<div class="ob-progress" aria-hidden="true">'; for (var i = 1; i <= STEPS; i++) h += '<i class="' + (i <= ob.step ? 'on' : '') + '"></i>'; return h + '</div>'; }
+  function progress() { var at = Math.min(STEPS, ob.step - (ob.step > 3 ? Math.min(2, ob.step - 3) : 0)); var h = '<div class="ob-progress" aria-hidden="true">'; for (var i = 1; i <= STEPS; i++) h += '<i class="' + (i <= at ? 'on' : '') + '"></i>'; return h + '</div>'; }
   function wrap(body, foot, noProg) {
     return '<div class="ob" data-theme="' + ob.theme + '">' + (noProg ? '' : progress()) + '<div class="ob-body">' + body + '</div><div class="ob-foot">' + foot + '</div></div>';
   }
@@ -33,8 +37,7 @@
       '<div class="wc-txt"><div class="wc-name">' + t.name + '</div><div class="wc-sub">' + esc(t.blurb) + '</div></div><span class="wc-check">' + A.icon('check') + '</span></button>';
   }
   function stepWorld() {
-    return wrap('<h1>Pick your world</h1><p class="lede" style="margin-bottom:16px">Same game, different look. Switch anytime and your progress comes with you.</p>' + worldCard('expedition') + worldCard('grove') +
-      '<div class="set-group" style="margin:6px 0 0"><div class="set-row"><span class="sr-main"><span class="sr-t" style="display:block">Calm mode</span><span class="sr-s">Softer celebrations, no sound</span></span><button class="toggle" role="switch" aria-label="Calm mode" aria-checked="' + (St.S.settings.calm ? 'true' : 'false') + '" data-act="ob-calm"></button></div></div>',
+    return wrap('<h1>Pick your world</h1><p class="lede" style="margin-bottom:16px">Same game, different look. Switch anytime and your progress comes with you.</p>' + worldCard('expedition') + worldCard('grove'),
       '<button class="btn btn-cta btn-block" data-act="ob-next">Continue</button>');
   }
   function stepCompanion() {
@@ -45,21 +48,26 @@
       '<div class="field" style="margin-top:18px"><label for="obName" style="font-weight:800">Name them</label><input class="input" id="obName" value="' + esc(ob.name) + '" maxlength="14"></div>',
       '<button class="btn btn-cta btn-block" data-act="ob-next">That’s my buddy</button>');
   }
-  function stepRemember() {
-    var times = [['08:00', 'Morning'], ['12:00', 'Midday'], ['18:00', 'Evening'], ['21:30', 'Bedtime']];
-    return wrap('<h1>What do you want to remember every day?</h1>' +
-      '<div class="big-choice"><button class="' + (ob.mode === 'meds' ? 'on' : '') + '" data-act="ob-mode" data-v="meds"><span class="bc-em">💊</span><span><span class="bc-t" style="display:block">A medicine</span><span class="bc-s">Prescription or over the counter</span></span></button>' +
-      '<button class="' + (ob.mode === 'habits' ? 'on' : '') + '" data-act="ob-mode" data-v="habits"><span class="bc-em">🌿</span><span><span class="bc-t" style="display:block">A vitamin or habit</span><span class="bc-s">Vitamins, water, a stretch, the dog’s pill</span></span></button></div>' +
-      '<div class="field" style="margin-top:16px"><label for="obMed" style="font-weight:800">What do you call it?</label><input class="input" id="obMed" value="' + esc(ob.medName) + '" placeholder="' + (ob.mode === 'habits' ? 'e.g. Vitamin D' : 'e.g. “focus pill” or its name') + '"><p style="font-size:.85rem;color:var(--muted);font-weight:600;margin-top:6px">A nickname is fine. It stays on your phone and is never shared.</p></div>' +
-      '<div class="field"><div class="lab" style="font-weight:800;margin-bottom:6px">When?</div><div class="chips">' + times.map(function (x) { return '<button class="chip-btn ' + (ob.time === x[0] ? 'on' : '') + '" data-act="ob-time" data-v="' + x[0] + '">' + x[1] + '</button>'; }).join('') + '</div></div>',
-      '<button class="btn btn-cta btn-block" data-act="ob-next">Continue</button>');
+  /* The item step IS the shared ItemEditor (same controls, words and order as "+ Add" and "Edit"); only the chrome differs. */
+  function ensureEditor(sub) {
+    var IE = root.ItemEditor, st = IE.state();
+    if (!st || st.mode !== 'onboarding') { st = IE.open('onboarding', ob.item ? { item: ob.item } : {}); }
+    if (sub) st.step = sub;
+    return st;
+  }
+  function stepEditor() {
+    var IE = root.ItemEditor, st = ensureEditor();
+    ob.step = 2 + st.step; // keep the progress dots in step with the editor
+    var foot = '<button class="btn btn-cta btn-block" data-act="' + (st.step < 3 ? 'ie-next' : 'ie-save') + '">' + (st.step < 3 ? 'Next' : 'Looks good') + '</button>' +
+      (st.step > 1 ? '<button class="btn btn-ghost btn-block" data-act="ie-back">Back</button>' : '');
+    return wrap('<div class="ob-ie clin">' + IE.body() + '</div>', foot);
   }
   function stepWonder() {
     return wrap('<h1>One quick question</h1><p class="lede">Ever take a pill out, get sidetracked, and later wonder if you actually took it?</p>' +
       '<div class="ob-hero" style="height:200px;margin-top:18px">' + A.scenery(ob.theme) + '<div class="ob-comp" style="width:130px;height:130px;bottom:10px">' + A.companion(compDef(), 'holding') + '</div><div class="held-frag" style="left:50%;top:auto;bottom:62px;margin-left:-24px">' + A.fragment(ob.theme === 'grove' ? 'bloom' : 'beacon') + '</div></div>' +
       '<div class="big-choice"><button class="' + (ob.twoStep ? 'on' : '') + '" data-act="ob-wonder" data-v="1"><span class="bc-em">🙋</span><span><span class="bc-t" style="display:block">Yes, that’s me</span><span class="bc-s">Use two taps: Pill out, then Swallowed</span></span></button>' +
-      '<button class="' + (!ob.twoStep ? 'on' : '') + '" data-act="ob-wonder" data-v="0"><span class="bc-em">👍</span><span><span class="bc-t" style="display:block">Not really</span><span class="bc-s">One tap: Took it</span></span></button></div>',
-      '<button class="btn btn-cta btn-block" data-act="ob-next">Continue</button>');
+      '<button class="' + (!ob.twoStep ? 'on' : '') + '" data-act="ob-wonder" data-v="0"><span class="bc-em">👍</span><span><span class="bc-t" style="display:block">Not really</span><span class="bc-s">One tap: Took it</span></span></button></div>' +
+      '<p class="ob-addmore">Add more anytime from My list.</p>', '<button class="btn btn-cta btn-block" data-act="ob-next">Continue</button>');
   }
   function stepPractice() {
     var st = ob.practice, style = ob.theme === 'grove' ? 'bloom' : 'beacon', t = th();
@@ -90,32 +98,35 @@
     var t = th();
     return wrap('<h1>' + esc(ob.name) + ' heads out tonight</h1><p class="lede">Pick a spot. Come see what comes back in the morning.</p>' +
       '<div class="opt-list" style="margin-top:16px">' + t.destinations.map(function (d) { return '<button class="opt ' + (ob.dest === d.id ? 'on' : '') + '" data-act="ob-dest" data-v="' + d.id + '" style="border-color:' + (ob.dest === d.id ? 'var(--ink)' : 'var(--line)') + ';background:var(--card);color:var(--ink)"><span style="font-size:2rem">' + d.icon + '</span><span><span class="o-t" style="display:block">' + esc(d.name.replace(/^the /, '').replace(/^./, function (c) { return c.toUpperCase(); })) + '</span><span class="o-s" style="color:var(--muted)">' + esc(d.route) + '</span></span></button>'; }).join('') + '</div>' +
-      '<div class="card" style="margin:16px 0 0"><div class="row"><span class="dit-btn" style="pointer-events:none">' + A.icon('clock') + 'Did I take it?</span><p style="margin:0;font-weight:700">Tap this anytime to see exactly when you took it.</p></div></div>',
+      '<div class="ob-illus" style="margin:16px 0 0"><div class="row"><span class="dit-btn illus" aria-hidden="true">' + A.icon('clock') + 'Did I take it?</span><p style="margin:0;font-weight:700">Tap this anytime to see exactly when you took it.</p></div></div>',
       '<button class="btn btn-cta btn-block" data-act="ob-finish" ' + (ob.dest ? '' : 'disabled style="opacity:.5"') + '>Let’s go</button>');
   }
 
   function render() {
-    var view = [stepWelcome, stepWorld, stepCompanion, stepRemember, stepWonder, stepPractice, stepRun, stepChest, stepTrip][ob.step]();
-    return view;
+    var n = NAMES[ob.step] || 'welcome';
+    if (n === 'ie1' || n === 'ie2' || n === 'ie3') return stepEditor();
+    return ({ welcome: stepWelcome, world: stepWorld, buddy: stepCompanion, wonder: stepWonder, practice: stepPractice, run: stepRun, chest: stepChest, trip: stepTrip })[n]();
   }
+  function stepIndex(n) { return NAMES.indexOf(n); }
   function readInputs() {
     var n = document.getElementById('obName'); if (n) ob.name = n.value.trim() || compDef().defaultName;
-    var m = document.getElementById('obMed'); if (m) ob.medName = m.value.trim();
   }
   function go(step) { readInputs(); ob.step = step; persist(); root.App.render(); var b = document.querySelector('.ob-body'); if (b) b.scrollTop = 0; }
 
-  root.Onboarding = { render: render, get active() { return ob.active; }, reset: reset, state: function () { return ob; } };
+  // Called by the ItemEditor when its Review is confirmed in onboarding.
+  function editorSaved(item) {
+    ob.item = item; root.ItemEditor.close();
+    go(stepIndex(item.type === 'habit' ? 'practice' : 'wonder'));
+  }
+  root.Onboarding = { render: render, get active() { return ob.active; }, reset: reset, state: function () { return ob; }, editorSaved: editorSaved, stepIndex: stepIndex };
   Object.assign(root.App.acts, {
     'ob-next': function () {
-      if (ob.step === 3) { readInputs(); if (!ob.medName) ob.medName = ob.mode === 'habits' ? 'Vitamin D' : 'Morning med'; }
+      if (NAMES[ob.step] === 'buddy') { readInputs(); ensureEditor(1); go(stepIndex('ie1')); return; }
       go(ob.step + 1);
     },
     'ob-signin': function () { U.toast('Sign-in comes later. Your progress saves on this phone until then.'); },
     'ob-theme': function (el) { ob.theme = el.getAttribute('data-v'); St.S.theme = ob.theme; St.save(); ob.species = null; ob.name = ''; root.App.render(); },
-    'ob-calm': function () { St.S.settings.calm = !St.S.settings.calm; root.App.render(); },
     'ob-comp': function (el) { readInputs(); var prevDefault = compDef().defaultName; ob.species = el.getAttribute('data-v'); if (!ob.name || ob.name === prevDefault) ob.name = compDef().defaultName; root.App.render(); U.sfx('tap'); },
-    'ob-mode': function (el) { readInputs(); ob.mode = el.getAttribute('data-v'); root.App.render(); },
-    'ob-time': function (el) { readInputs(); ob.time = el.getAttribute('data-v'); root.App.render(); },
     'ob-wonder': function (el) { ob.twoStep = el.getAttribute('data-v') === '1'; root.App.render(); },
     'ob-pout': function () { ob.practice = 'out'; U.sfx('out'); U.haptic(12); root.App.render(); var cw = document.getElementById('compWrap'); if (cw) cw.classList.add('react'); },
     'ob-swallow': function () {
@@ -134,17 +145,18 @@
         }, 1300);
       });
     },
-    'ob-run': function () { root.Extra.openRun({ onboarding: true, practice: true, tutorial: true, onDone: function () { go(7); } }); },
+    'ob-run': function () { root.Extra.openRun({ onboarding: true, practice: true, tutorial: true, onDone: function () { go(CHEST); } }); },
     'ob-chest': function () {
       // complete onboarding into real state, then open the first chest with the shared chest animation
-      St.finishOnboarding({ theme: ob.theme, comp: { species: ob.species || th().companions[0].id, name: ob.name || compDef().defaultName }, mode: ob.mode, medName: ob.medName, time: ob.time, twoStep: ob.twoStep, dest: null });
+      St.finishOnboarding({ theme: ob.theme, comp: { species: ob.species || th().companions[0].id, name: ob.name || compDef().defaultName }, item: ob.item, twoStep: ob.item && ob.item.type === 'habit' ? false : ob.twoStep, dest: null, now: St.isLive() ? new Date() : null });
       var id = St.addChest('bronze', 'first');
-      root.CollectionUI.chestFx(id, function () { go(8); });
+      root.CollectionUI.chestFx(id, function () { go(stepIndex('trip')); });
     },
     'ob-dest': function (el) { ob.dest = el.getAttribute('data-v'); root.App.render(); },
     'ob-finish': function () {
       if (!ob.dest) return;
-      St.S.trip = { status: 'out', dest: ob.dest, leftDay: St.S.day }; St.S.today.tripSent = true; St.save();
+      // The first quest is a real quest (same as the board's "Get ready + Send"); it leaves at 9 PM and is back at 6 AM.
+      St.S.trip = { status: 'home' }; St.S.today.tripSent = false; St.sendQuest(St.questForDest(ob.dest) || 'q1'); St.save();
       ob.active = false; persist(); root.App.ui.tab = 'today'; root.App.ui.stack = []; root.App.render();
       U.toast('Welcome to Kindling!');
     }

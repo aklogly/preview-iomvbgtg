@@ -298,5 +298,15 @@
       '<path d="M20 3 C27 12 32 16 32 24 A12 12 0 0 1 8 24 C8 18 12 15 14 10 C16 15 18 16 20 14 C21 11 20 7 20 3Z" fill="url(#lg' + (uid - 1) + ')"/><path d="M20 20 C23 24 25 26 25 29 A5 5 0 0 1 15 29 C15 26 18 24 20 20Z" fill="#fff4c4"/></svg>';
   }
 
-  root.Art = { companion: companion, core: core, fragment: fragment, chest: chest, scenery: scenery, icon: icon, pill: pill, logo: logo };
+  /* v5.5: one generic icon per item TYPE (no shape or colour: refills change how a pill looks). Drawn in the clinical accent. */
+  var ITEM_ICONS = {
+    med: '<path d="M10.5 20.5l10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7z"/><path d="M8.5 8.5l7 7"/>',
+    vitamin: '<path d="M12 3.5c3.2 3.6 5 6.6 5 9.3a5 5 0 0 1-10 0c0-2.7 1.8-5.7 5-9.3z"/><path d="M10 13.5a2 2 0 0 0 2 2"/>',
+    habit: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M9.5 12.2l1.7 1.7 3.4-3.6"/>'
+  };
+  function itemIcon(item, cls) {
+    var t = (item && item.type) || 'med';
+    return '<span class="item-ic it-' + t + ' ' + (cls || '') + '" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">' + (ITEM_ICONS[t] || ITEM_ICONS.med) + '</svg></span>';
+  }
+  root.Art = { companion: companion, core: core, fragment: fragment, chest: chest, scenery: scenery, icon: icon, pill: itemIcon, itemIcon: itemIcon, logo: logo };
 })(window);
