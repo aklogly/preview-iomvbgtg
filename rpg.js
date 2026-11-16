@@ -93,7 +93,8 @@
   function stats(c, loadout) {
     var base = 2 + Math.floor((c.level || 1) / 5), s = { way: base, for: base, grit: base, charm: base };
     TREE.forEach(function (n) { if (n.stat && c.nodes && c.nodes[n.id]) s[n.stat] += n.amt; });
-    SLOTS.forEach(function (sl) { var it = loadout && ITEMS[loadout[sl]]; if (it) s[it.stat] += it.amt; });
+    // v5.6 Part B: Workbench level. Each level above +1 adds +1 to the gear's main stat (c.plus = { itemId: 1..5 }).
+    SLOTS.forEach(function (sl) { var id = loadout && loadout[sl], it = ITEMS[id]; if (it) s[it.stat] += it.amt + Math.max(0, Math.min(5, (c.plus && c.plus[id]) || 1) - 1); });
     return s;
   }
   function beatValue(c, loadout, beat) {
@@ -107,10 +108,11 @@
   var TIERS = [{ at: 0, great: 6, amazing: 10 }, { at: 21, great: 9, amazing: 15 }, { at: 50, great: 14, amazing: 22 }, { at: 140, great: 20, amazing: 30 }, { at: 280, great: 27, amazing: 38 }, { at: 600, great: 34, amazing: 46 }];
   function tierFor(daysPlayed) { var t = 0; for (var i = 0; i < TIERS.length; i++) if ((daysPlayed || 0) >= TIERS[i].at) t = i; return t; }
   // Same index as the theme destinations (Expedition: saltflats / canopy / tidepools; Grove: market / meadow / orchard).
+  // v5.6: each quest has a specimen set (its destination's set), used by "Look for".
   var QUESTS = [
-    { id: 'q1', beats: [{ stat: 'way', tag: 'ridge' }, { stat: 'for' }, { stat: 'way', tag: 'water', hidden: true }] },
-    { id: 'q2', beats: [{ stat: 'grit', tag: 'ridge' }, { stat: 'way' }, { stat: 'charm', hidden: true }] },
-    { id: 'q3', beats: [{ stat: 'for', tag: 'water' }, { stat: 'charm' }, { stat: 'grit', tag: 'water', hidden: true }] }
+    { id: 'q1', set: 1, beats: [{ stat: 'way', tag: 'ridge' }, { stat: 'for' }, { stat: 'way', tag: 'water', hidden: true }] },
+    { id: 'q2', set: 2, beats: [{ stat: 'grit', tag: 'ridge' }, { stat: 'way' }, { stat: 'charm', hidden: true }] },
+    { id: 'q3', set: 3, beats: [{ stat: 'for', tag: 'water' }, { stat: 'charm' }, { stat: 'grit', tag: 'water', hidden: true }] }
   ];
   function quest(id) { for (var i = 0; i < QUESTS.length; i++) if (QUESTS[i].id === id) return QUESTS[i]; return QUESTS[0]; }
   function questIndex(id) { for (var i = 0; i < QUESTS.length; i++) if (QUESTS[i].id === id) return i; return 0; }
@@ -180,25 +182,29 @@
   // Base per quest-day: 1 Find + 30 Stars + flat XP. Great = +1 roll, Amazing = +2 rolls (one with +1 rarity).
   var BASE_HAUL = { finds: 1, stars: 30 };
   var TABLE = [['find', 45], ['gear', 30], ['stars', 25]];
-  function rollCat(r) { var x = r() * 100; for (var i = 0; i < TABLE.length; i++) { x -= TABLE[i][1]; if (x < 0) return TABLE[i][0]; } return 'find'; }
+  function rollCat(r, table) { table = table || TABLE; var x = r() * 100; for (var i = 0; i < table.length; i++) { x -= table[i][1]; if (x < 0) return table[i][0]; } return 'find'; }
+  // v5.6 "Look for": re-weights only the extra rolls (Anything = TABLE). Specimens rolls bring 2, all from the quest's set.
+  var LOOK_FOR = { any: { table: TABLE, mult: 1, setShare: 0.7 }, gear: { table: [['find', 20], ['gear', 60], ['stars', 20]], mult: 1, setShare: 0.7 }, specimens: { table: [['find', 75], ['gear', 5], ['stars', 20]], mult: 2, setShare: 1 } };
   /* rollHaul(results, ctx) -> { finds, findBumps, stars, gear:[{id,dup}], rolls }
    * ctx: { seed, bag (owned gear ids), kid, forceGear }. The rng is seeded from quest + day only: never from Spark or answers. */
   function rollHaul(results, ctx) {
     ctx = ctx || {};
-    var out = { finds: BASE_HAUL.finds, findBumps: 0, stars: BASE_HAUL.stars, gear: [], rolls: [] };
+    var lf = LOOK_FOR[ctx.lookFor] || LOOK_FOR.any;
+    var out = { finds: BASE_HAUL.finds, findBumps: 0, stars: BASE_HAUL.stars, gear: [], rolls: [], set: ctx.set || null, setShare: lf.setShare, lookFor: ctx.lookFor || 'any', rollFinds: 0 };
     var bag = (ctx.bag || []).slice(), nRolls = 0, bumps = 0;
     results.forEach(function (r) { if (r.tier === 'great') nRolls += 1; if (r.tier === 'amazing') { nRolls += 2; bumps += 1; } });
     function giveGear(id) { var dup = bag.indexOf(id) >= 0; out.gear.push({ id: id, dup: dup }); if (!dup) bag.push(id); }
     if (ctx.kid) {
       // Kids: a fixed table. Steady = the base; each Great = +1 Find; each Amazing = +1 Find + the next sticker in a published order.
-      results.forEach(function (r) { if (r.tier !== 'steady') { out.finds += 1; out.rolls.push('find'); } if (r.tier === 'amazing') { var nx = KID_STICKERS.filter(function (x) { return bag.indexOf(x) < 0; })[0]; if (nx) { giveGear(nx); out.rolls.push('gear'); } } });
+      // Kids, "Look for: Specimens": +1 more (Common, from the set) per Great beat. Fixed, never random.
+      results.forEach(function (r) { if (r.tier !== 'steady') { out.finds += 1; out.rolls.push('find'); } if (r.tier === 'great' && ctx.lookFor === 'specimens') { out.finds += 1; out.rolls.push('find'); } if (r.tier === 'amazing') { var nx = KID_STICKERS.filter(function (x) { return bag.indexOf(x) < 0; })[0]; if (nx) { giveGear(nx); out.rolls.push('gear'); } } });
       return out;
     }
     var r = E.rng('rpg-' + (ctx.seed || 'x'));
     if (ctx.forceGear) { giveGear(ctx.forceGear); out.rolls.push('gear'); }
     for (var i = 0; i < nRolls; i++) {
-      var cat = rollCat(r);
-      if (cat === 'find') { out.finds += 1; if (bumps > 0) { out.findBumps += 1; bumps--; } }
+      var cat = rollCat(r, lf.table);
+      if (cat === 'find') { out.finds += lf.mult; out.rollFinds += lf.mult; if (bumps > 0) { out.findBumps += 1; bumps--; } }
       else if (cat === 'stars') out.stars += 40;
       else { var pool = BASIC.filter(function (x) { return bag.indexOf(x) < 0; }); if (!pool.length || r() < 0.25) pool = BASIC; giveGear(pool[Math.floor(r() * pool.length)]); }
       out.rolls.push(cat);
@@ -230,7 +236,7 @@
     TREE: TREE, TREE_OPENS: TREE_OPENS, FORK_OPENS: FORK_OPENS, FORK_BONUS: FORK_BONUS, node: node, spentIn: spentIn, hasFlag: hasFlag, canLearn: canLearn,
     stats: stats, beatValue: beatValue, TIERS: TIERS, tierFor: tierFor, QUESTS: QUESTS, quest: quest, questIndex: questIndex, TIER_VAL: TIER_VAL,
     resolve: resolve, predict: predict, score: score, bestLoadout: bestLoadout, gearImpact: gearImpact, nodeImpact: nodeImpact,
-    BASE_HAUL: BASE_HAUL, rollHaul: rollHaul, PACKABLE: PACKABLE, packedFinds: packedFinds, chestChoices: chestChoices
+    BASE_HAUL: BASE_HAUL, rollHaul: rollHaul, TABLE: TABLE, LOOK_FOR: LOOK_FOR, PACKABLE: PACKABLE, packedFinds: packedFinds, chestChoices: chestChoices
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = RPG;
   root.RPG = RPG;

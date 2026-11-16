@@ -80,7 +80,7 @@
 
   /* ----- schedule model (PM spec §1.2). Legacy v5.4 "kind" items map onto it, so old presets compile identically. ----- */
   function schedOf(item) {
-    if (item && item.schedule) return item.schedule;
+    if (item && item.schedule) { migrateTimes(item.schedule); return item.schedule; }
     var times = item && item.times && item.times.length ? item.times.slice() : ['08:00'];
     var s = { pattern: { kind: 'daily' }, times: { mode: 'list', list: times }, start: item && item.startDay != null ? item.startDay : null, end: item && item.endDay != null ? item.endDay : null, doseSteps: null };
     var k = item && item.kind;
@@ -91,16 +91,23 @@
   }
   function isAsNeeded(item) { return schedOf(item).pattern.kind === 'asNeeded'; }
   function itemType(item) { return (item && item.type) || 'med'; }
-  // everyHours expands to first, first+h, ... while at or before last and within 24 hours (sorted by game minutes).
+  /* v5.6 (A6): "every few hours" is gone. A saved everyHours schedule is migrated ONCE to its expanded list of times
+   * (first, first+h, ... up to last, within 24 hours), so a person keeps exactly the reminders they had. The engine has no
+   * everyHours path any more; this migration is the only place the old rule still lives. */
+  function migrateTimes(s) {
+    var t = s && s.times;
+    if (!t || t.mode !== 'everyHours') return false;
+    var h = Math.max(1, Math.min(12, +t.hours || 8)), first = gameMins(t.first || '08:00');
+    var last = t.last ? gameMins(t.last) : first + 1440 - 1, out = [];
+    if (last < first) last = first;
+    for (var m = first; m <= last && m < first + 1440 && out.length < 24; m += h * 60) out.push(hhmm(m));
+    s.times = { mode: 'list', list: out.length ? out : ['08:00'] };
+    return true;
+  }
+  function migrateItemTimes(item) { return !!(item && item.schedule && migrateTimes(item.schedule)); }
   function expandTimes(times) {
     if (!times) return ['08:00'];
-    if (times.mode === 'everyHours') {
-      var h = Math.max(1, Math.min(12, +times.hours || 8)), first = gameMins(times.first || '08:00');
-      var last = times.last ? gameMins(times.last) : first + 1440 - 1, out = [];
-      if (last < first) last = first;
-      for (var m = first; m <= last && m < first + 1440 && out.length < 24; m += h * 60) out.push(hhmm(m));
-      return out;
-    }
+    if (times.mode === 'everyHours') { var tmp = { times: JSON.parse(JSON.stringify(times)) }; migrateTimes(tmp); times = tmp.times; } // an unmigrated copy (never stored)
     var list = (times.list && times.list.length ? times.list : ['08:00']).slice();
     return list.sort(function (a, b) { return gameMins(a) - gameMins(b); }).filter(function (t, i, a) { return a.indexOf(t) === i; });
   }
@@ -157,11 +164,28 @@
     for (var i = 1; i < steps.length; i++) if (steps[i].from === dayNum) return true;
     return false;
   }
-  /* "How many" per dose: item.amount (default for every time) and schedule.amounts[time] (a different amount at one time).
-   * Shown only when it isn't one (one pill is the normal case and would be noise on every row). */
-  function amountFor(item, time) { var s = schedOf(item); return (s.amounts && time && s.amounts[time]) || item.amount || ''; }
-  function amountShown(a) { return a && !/^1\s/.test(a) ? a : ''; }
+  /* "How many" per dose (v5.6 A3): free text, optional ("2", "1/2", "10 mL", "2 puffs"). item.amount is the default for every
+   * time; schedule.amounts[time] holds a different amount at one time. Shown on Today and in the sentence whenever it's filled. */
+  function amountFor(item, time) { var s = schedOf(item); var v = s.amounts && time && Object.prototype.hasOwnProperty.call(s.amounts, time) ? s.amounts[time] : item.amount; return String(v || '').trim(); }
+  // On Today a bare number reads "×2" so "Metformin ×2" can't be mistaken for part of the name. Words stay as typed.
+  function amountShown(a) { a = String(a || '').trim(); if (/^0+([.,]0+)?(\s|$)/.test(a) || /\/\s*0+(\s|$)/.test(a)) return ''; // "0" or "1/0": nothing to show
+    return /^(\d+([.,]\d+)?|\d*\s*[½¼¾⅓⅔]|\d+\s*\/\s*\d+|\d+\s+\d+\s*\/\s*\d+)$/.test(a) ? '×' + a : a; }
+  /* Supply countdown (A3): the amount's leading number when there is one ("2 puffs" -> 2, "1/2" -> 0.5, "1 1/2" -> 1.5,
+   * "½" -> 0.5, "10 mL" -> 10); otherwise one per dose. */
+  var FRAC = { '½': 0.5, '¼': 0.25, '¾': 0.75, '⅓': 1 / 3, '⅔': 2 / 3 };
+  function amountUnits(text) {
+    var t = String(text || '').trim().replace(/,/g, '.'), m;
+    if (!t) return 1;
+    if ((m = /^(\d+)\s+(\d+)\s*\/\s*(\d+)/.exec(t)) && +m[3] > 0) return +m[1] + (+m[2]) / (+m[3]);
+    if ((m = /^(\d+)\s*([½¼¾⅓⅔])/.exec(t))) return +m[1] + FRAC[m[2]];
+    if ((m = /^(\d*\.?\d+)\s*\/\s*(\d+)/.exec(t)) && +m[2] > 0) return (+m[1]) / (+m[2]);
+    if ((m = /^([½¼¾⅓⅔])/.exec(t))) return FRAC[m[1]];
+    if ((m = /^(\d*\.?\d+)/.exec(t)) && +m[1] > 0) return +m[1];
+    return 1;
+  }
   function doseText(item, day, time) { return [doseLabel(item, day), amountShown(amountFor(item, time))].filter(Boolean).join(' · '); }
+  // Units used on a day the item is due (sum over its times). Used for "About N days left".
+  function unitsOn(item, day) { return timesOn(item, day).reduce(function (a, t) { return a + amountUnits(amountFor(item, t)); }, 0); }
   function timesOn(item, day) {
     var list = expandTimes(schedOf(item).times);
     // S5: an item added mid-day starts today only with the times still ahead.
@@ -248,14 +272,12 @@
     if (d.length === 1) return 'Every ' + WD_LONG[d[0]];
     return 'Every ' + joinAnd(d.map(function (x) { return WD[x]; }));
   }
-  function timesText(times) {
-    if (times && times.mode === 'everyHours') { var l = expandTimes(times); return 'every ' + times.hours + ' hours from ' + fmtTime(toMins(times.first || '08:00')) + ' (' + l.map(function (t) { return fmtTime(toMins(t)); }).join(', ') + ')'; }
-    return 'at ' + joinAnd(expandTimes(times).map(function (t) { return fmtTime(toMins(t)); }));
-  }
+  function timesText(times) { return 'at ' + joinAnd(expandTimes(times).map(function (t) { return fmtTime(toMins(t)); })); }
+  // A3: the amount shows whenever it's filled. One amount for every time: "..., 2 each time". Different amounts: per time.
   function timesTextWithAmounts(item, s) {
     var list = expandTimes(s.times), amts = list.map(function (t) { return amountFor(item, t); });
-    var differ = s.times.mode !== 'everyHours' && amts.some(function (a) { return a !== amts[0]; });
-    if (!differ) return timesText(s.times);
+    var same = amts.every(function (a) { return a === amts[0]; });
+    if (same) return timesText(s.times) + (amts[0] ? ', ' + amts[0] + ' each time' : '');
     return 'at ' + joinAnd(list.map(function (t, i) { return fmtTime(toMins(t)) + (amts[i] ? ' (' + amts[i] + ')' : ''); }));
   }
   function patternText(p) {
@@ -315,6 +337,21 @@
       r.charge = Math.round(r.charge * 0.5); r.stars = Math.round(r.stars * 0.5); r.xp = Math.round(r.xp * 0.5); r.onTimeStars = 0;
     }
     return r;
+  }
+
+  /* ---------- v5.6 refill reminders (A7) ----------
+   * When supply is tracked, the reminder starts `lead` days before it runs out (default 7, editable on Review) and shows
+   * every day until the person answers: "Refill's in" (supply goes up), "Not needed" (supply tracking stops until they turn
+   * it back on) or "Something else" (asks again in 3 days). Pure: the caller passes days left (Store.daysLeft). */
+  var REFILL = { lead: 7, reask: 3, maxLead: 30 };
+  function refillLead(item) { var r = item && item.refill; var n = r && r.lead != null ? +r.lead : REFILL.lead; return Math.max(1, Math.min(REFILL.maxLead, Math.round(n) || REFILL.lead)); }
+  function refillDue(item, day, daysLeft) {
+    if (!item || item.supply == null || daysLeft == null) return false;
+    if (isAsNeeded(item) || isEnded(item, day) || isPaused(item, day)) return false;
+    var r = item.refill || {};
+    if (r.askAgain != null && day < r.askAgain) return false;
+    if (r.cleared) return false; // answered "Refill's in" this cycle: the card stays away until supply runs down again
+    return daysLeft <= refillLead(item);
   }
 
   /* ---------- PRN / as-needed journal: once per day, flat, same for "used" and "didn't need any" ---------- */
@@ -469,20 +506,20 @@
     if (st === 'didnt') return { label: 'Not taken', tone: 'neutral', icon: '–' };
     if (st === 'unsure') return { label: 'Not sure', tone: 'neutral', icon: '?' };
     if (st === 'held') return { label: 'Held by care team', tone: 'neutral', icon: '⏸' };
-    if (!stack) return { label: 'No entry', tone: 'neutral', icon: '○' };
+    if (!stack) return { label: 'Not logged', tone: 'neutral', icon: '○' };
     if (clockMins < stack.mins - WINDOW.before) return { label: fmtTime(stack.mins), tone: 'upcoming', icon: '◷' };
     if (clockMins <= stack.mins + WINDOW.after) return { label: 'Due now', tone: 'attn', icon: '●' };
-    return { label: 'No entry yet', tone: 'neutral', icon: '○' };
+    return { label: 'Not logged', tone: 'neutral', icon: '○' };
   }
   /* recordLabel(entry, stack, opts): the one state label for every record surface (Today chips, Did I take it?,
    * the calendar day sheet, item detail, lock screen). Habit-only check-ins read "Done", never "Taken".
-   * opts: { clock, habit, past }. A past day with nothing logged is "No entry", in neutral grey. Never red, never "missed". */
+   * opts: { clock, habit, past }. A past day with nothing logged is "Not logged" (v5.6), in neutral grey. Never red, never "missed". */
   function recordLabel(entry, stack, opts) {
     opts = opts || {};
     var st = entry && entry.state, habit = !!opts.habit;
     if (stack && stack.kind === 'rest') return st && st !== 'none' ? { label: 'All set ' + fmtTime(entry.at), tone: 'done', icon: '✓' } : { label: 'Nothing was scheduled', tone: 'neutral', icon: '☾' };
     if (!st || st === 'none') {
-      if (opts.past || !stack) return { label: 'No entry', tone: 'neutral', icon: '○' };
+      if (opts.past || !stack) return { label: 'Not logged', tone: 'neutral', icon: '○' };
       return doseStatus(null, stack, opts.clock == null ? 0 : opts.clock);
     }
     if (st === 'unsure' && entry.fromOut) return { label: 'Out ' + fmtTime(entry.outAt) + ', not confirmed', tone: 'neutral', icon: '?' };
@@ -675,7 +712,7 @@
     SLOTS: SLOTS, slotFor: slotFor, isScheduledOn: isScheduledOn, occursOn: occursOn, schedOf: schedOf, isAsNeeded: isAsNeeded, itemType: itemType, expandTimes: expandTimes, bossEligible: bossEligible, gameMins: gameMins, hhmm: hhmm,
     dayOfDate: dayOfDate, dayOfJs: dayOfJs, daysInMonth: daysInMonth, isoDate: isoDate, gameNow: gameNow, timesOn: timesOn, isEnded: isEnded, CLUSTER: CLUSTER,
     bossDayInWeek: bossDayInWeek, nextBossDay: nextBossDay, nextOccurrenceDay: nextOccurrenceDay, nextOccurrences: nextOccurrences, relDay: relDay, scheduleSentence: scheduleSentence, rangeText: rangeText, migrateItem: migrateItem, ord: ord, WD: WD, MON: MON,
-    recordLabel: recordLabel, amountFor: amountFor, amountShown: amountShown, doseText: doseText, ARCADE: ARCADE, arcadeReward: arcadeReward, drawNightDay: drawNightDay, boardNo: boardNo, isPaused: isPaused, doseLabel: doseLabel, taperStepChanged: taperStepChanged,
+    recordLabel: recordLabel, amountFor: amountFor, amountShown: amountShown, amountUnits: amountUnits, unitsOn: unitsOn, doseText: doseText, migrateTimes: migrateTimes, migrateItemTimes: migrateItemTimes, REFILL: REFILL, refillLead: refillLead, refillDue: refillDue, ARCADE: ARCADE, arcadeReward: arcadeReward, drawNightDay: drawNightDay, boardNo: boardNo, isPaused: isPaused, doseLabel: doseLabel, taperStepChanged: taperStepChanged,
     compilePlan: compilePlan, planTotal: planTotal, inWindow: inWindow, WINDOW: WINDOW,
     creditFor: creditFor, journalReward: journalReward, JOURNAL: JOURNAL,
     powerBank: powerBank, nextPowerUp: nextPowerUp, PU_ORDER: PU_ORDER, PU_CAP: PU_CAP,

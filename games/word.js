@@ -207,8 +207,9 @@
     if (this.practice || !t.gem || this.paid[id]) return null;
     this.paid[id] = 1;
     var r = this.packed.lucky === id ? U.upRarity(t.gem.rarity) : t.gem.rarity, f = { id: 'find.' + r + '.' + t.gem.item, rarity: r };
+    if (this.packed.lucky === id) f.pu = true;
     this.finds.push(f);
-    if (this.packed.double === id) this.finds.push({ id: f.id, rarity: f.rarity });
+    if (this.packed.double === id) this.finds.push({ id: f.id, rarity: f.rarity, pu: true });
     return { stone: id, rarity: r, item: t.gem.item, doubled: this.packed.double === id };
   };
   Session.prototype.available = function () {
@@ -254,7 +255,7 @@
     this.log.push(letters);
     if (this.rows.length === 1 && this.packed.magnet && !this.practice) {
       var lit = fb.filter(function (x) { return x === 'lit'; }).length, k = Math.min(3, lit);
-      for (var m = 0; m < k; m++) this.finds.push({ id: 'find.common.' + ((this.b.puzzleNo + m) % 4 + 4) % 4, rarity: 'common' });
+      for (var m = 0; m < k; m++) this.finds.push({ id: 'find.common.' + ((this.b.puzzleNo + m) % 4 + 4) % 4, rarity: 'common', pu: true });
       this.magnetPaid = k; ev.magnet = k;
     }
     ev.clueNow = !clueBefore && this.clueShown();
@@ -598,8 +599,8 @@
       return '<div class="ag-intro-badge">' + svg(T.litIcon) + '</div>' +
         '<div class="ag-kicker">' + esc(puzzleLabel) + ' &middot; ' + dl + '</div>' +
         '<h3 class="ag-sheet-h">' + esc(name) + '</h3>' + U.introControls(opts, mode, difficulty) +
-        '<p class="ag-sheet-p">Find the hidden word. Put ' + T.stones + ' in the spots and tap Try. Any order is a fair guess, and there is no limit.</p>' +
-        legend() +
+        U.rulesWrap(opts, '<p class="ag-sheet-p">Find the hidden word. Put ' + T.stones + ' in the spots and tap Try. Any order is a fair guess, and there is no limit.</p>' +
+        legend()) +
         '<div class="ag-facts"><span><b>' + board.length + '</b> letters</span><span><b>' + board.decoys.length + '</b> ' + (board.decoys.length === 1 ? 'extra ' + T.stone : 'extra ' + T.stones) + '</span><span>' + clueFact + '</span></div>' +
         '<p class="ag-mode-line">' + esc(modeLine()) + '</p>' + packBlock +
         '<div class="ag-sheet-actions"><button type="button" class="ag-btn ag-primary ag-big" data-act="start" data-autofocus>Let’s go</button></div>';

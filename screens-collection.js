@@ -8,19 +8,20 @@
   var RCOL = { common: '#ffffff', uncommon: '#7cc8ff', rare: '#b48cff', epic: '#ffcc33' };
 
   function albumHtml() {
-    var tm = th(), owned = S().owned, total = 0;
+    var tm = th(), owned = S().owned, found = S().found || {}, total = 0, PU = root.ProgressUI;
     var sets = tm.sets.map(function (set, si) {
       var have = 0, cells = '';
       for (var i = 1; i <= 9; i++) {
-        var id = 's' + (si + 1) + '-' + i, f = E.FIND_BY_ID[id], n = owned[id] || 0, a = Th.findArt(tm, id);
-        if (n) have++;
-        cells += '<button class="find r-' + f.rarity + (n ? '' : ' locked') + '" data-act="find" data-f="' + id + '" aria-label="' + esc(n ? a.name + ', ' + f.rarity : 'Not found yet, ' + f.rarity) + '"><span class="em">' + a.icon + '</span><span class="nm">' + esc(n ? a.name : '???') + '</span>' + (n > 1 ? '<span class="cnt">x' + n + '</span>' : '') + '</button>';
+        // v5.6: "found" is permanent (an entry never goes dark, even with 0 kept); Shiny adds a gold edge
+        var id = 's' + (si + 1) + '-' + i, f = E.FIND_BY_ID[id], n = owned[id] || 0, a = Th.findArt(tm, id), fd = !!(found[id] || n), sh = !!(S().shiny && S().shiny[id]);
+        if (fd) have++;
+        cells += '<button class="find r-' + f.rarity + (fd ? '' : ' locked') + (sh ? ' shiny' : '') + '" data-act="find" data-f="' + id + '" aria-label="' + esc(fd ? a.name + ', ' + f.rarity + (sh ? ', Shiny' : '') : 'Not found yet, ' + f.rarity) + '"><span class="em">' + a.icon + '</span><span class="nm">' + esc(fd ? a.name : '???') + '</span>' + (n > 1 ? '<span class="cnt">x' + n + '</span>' : '') + (PU ? PU.cellExtras(id) : '') + '</button>';
       }
       total += have;
-      return '<section class="set-card"><div class="set-head"><h3>' + esc(set.name) + '</h3><span class="count">' + have + ' of 9' + (have === 9 ? ' ✓' : '') + '</span></div><div class="find-grid">' + cells + '</div>' +
-        (have === 9 ? '' : '<p class="muted" style="font-size:.82rem;font-weight:700;margin-top:8px">Finish the set for a set ' + esc(tm.terms.chest.toLowerCase()) + ' and a trophy for your ' + esc(tm.terms.home) + '.</p>') + '</section>';
+      return '<section class="set-card"><div class="set-head"><h3>' + esc(set.name) + ' <span class="count">· ' + have + ' of 9 found' + (have === 9 ? ' ✓' : '') + '</span></h3>' + (PU ? PU.setHeader(si + 1) : '') + '</div><div class="find-grid">' + cells + '</div>' +
+        (have === 9 ? '' : '<p class="muted" style="font-size:.82rem;font-weight:700;margin-top:8px">Finish the set for a trophy for your ' + esc(tm.terms.home) + ' and a title.</p>') + '</section>';
     }).join('');
-    return '<div class="row" style="margin:0 16px 12px"><p class="grow muted" style="font-weight:700">' + total + ' of 36 ' + esc(tm.terms.finds) + ' found</p><button class="btn btn-soft" data-act="album-info">' + A.icon('info') + ' How it works</button></div>' + sets;
+    return '<div class="row" style="margin:0 16px 12px;flex-wrap:wrap;gap:8px"><p class="grow muted" style="font-weight:700">' + total + ' of 36 ' + esc(tm.terms.finds) + ' found</p><button class="btn btn-soft" data-act="album-info">' + A.icon('info') + ' How it works</button><button class="btn btn-soft" data-act="go" data-to="workbench">' + esc(tm.terms.bench) + '</button></div>' + sets;
   }
   function homeHtml() {
     var s = S(), tm = th(), slots = '';
@@ -64,20 +65,23 @@
   function oddsHtml() {
     var rows = Object.keys(E.CHESTS).map(function (k) { var c = E.CHESTS[k], w = c.weights; return '<tr><td><b>' + c.label + '</b></td><td>' + c.finds + '</td><td>' + w.common + '%</td><td>' + w.uncommon + '%</td><td>' + w.rare + '%</td><td>' + w.epic + '%</td></tr>'; }).join('');
     return '<table class="odds-table"><thead><tr><th>Chest</th><th>Finds</th><th>Common</th><th>Uncom.</th><th>Rare</th><th>Epic</th></tr></thead><tbody>' + rows + '</tbody></table>' +
-      '<ul style="padding-left:20px;margin-top:12px;font-weight:600;color:var(--ink-2)"><li>Odds are per find.</li><li>Gold always includes a rare or better and a power-up.</li><li>If 9 in a row have no rare, the 10th guarantees one.</li><li>Duplicates are saved as Scraps for crafting a missing find later.</li><li>Epic and Legendary chests also let you choose 1 of 3 pieces of gear. No luck, and never one you own.</li><li>A 3-star Run pays Silver. Gold is for the weekly headline and milestones.</li><li>Chests are earned only. Nothing is for sale, ever.</li></ul>';
+      '<ul style="padding-left:20px;margin-top:12px;font-weight:600;color:var(--ink-2)"><li>Odds are per find.</li><li>Gold always includes a rare or better and a power-up.</li><li>If 9 in a row have no rare, the 10th guarantees one.</li><li>Extra copies are spares: 3 spares make 1 of the next kind up, and you pick which one.</li><li>Epic and Legendary chests also let you choose 1 of 3 pieces of gear. No luck, and never one you own.</li><li>A 3-star Run pays Silver. Gold is for the weekly headline and milestones.</li><li>Chests are earned only. They are never for sale.</li></ul>';
   }
 
-  /* ---------- the big chest opening ---------- */
+  /* ---------- the big chest opening ----------
+   * v5.6 (A9): one tap. "Open it" (anywhere) lands here and the chest opens by itself: it wobbles for about 0.8 s, pops open
+   * and shows what's inside. No second tap. With Big celebrations off (reduced motion) it opens straight to the contents. */
   function chestFx(id, after) {
     var s = S(), tm = th(), c = s.chests.filter(function (x) { return x.id === id; })[0]; if (!c || c.opened) return;
     if (document.getElementById('chestStage')) return; // one chest opening at a time (double-tap safe)
     var label = E.CHESTS[c.type].label;
     U.full('<button class="sh-close" style="position:absolute;right:14px;top:14px;width:48px;height:48px;border-radius:50%;border:0;background:rgba(255,255,255,.18);color:#fff;display:grid;place-items:center;cursor:pointer" data-act="odds" aria-label="Odds">' + A.icon('info') + '</button>' +
-      '<div class="rays" style="opacity:.6"></div><div class="f-title">' + label + ' ' + esc(tm.terms.chest) + '</div><div class="f-sub" id="chestHint">Tap to open</div>' +
-      '<button class="chest-stage" id="chestStage" data-act="chest-tap" data-c="' + id + '" style="border:0;background:none;cursor:pointer" aria-label="Open the chest">' + A.chest(c.type) + '<i class="flare" id="chestFlare"></i></button>' +
+      '<div class="rays" style="opacity:.6"></div><div class="f-title">' + label + ' ' + esc(tm.terms.chest) + '</div><div class="f-sub" id="chestHint" aria-live="polite">Opening…</div>' +
+      '<div class="chest-stage" id="chestStage" data-c="' + id + '" aria-hidden="true">' + A.chest(c.type) + '<i class="flare" id="chestFlare"></i></div>' +
       '<div class="reveal-cards" id="revealCards"></div><div class="loot-line" id="lootLine"></div><div class="f-sub" id="pityLine" style="font-size:.9rem"></div>' +
       '<div class="f-actions" id="chestActs"></div>', { bg: s.theme === 'grove' ? 'grove-bg' : 'dark', onClose: function () { root.App.render(); after && after(); } });
     U.sfx('tap');
+    var st0 = document.getElementById('chestStage'); if (st0) chestTap(st0);
   }
   function chestTap(el) {
     var id = el.getAttribute('data-c'), stage = document.getElementById('chestStage');
@@ -85,10 +89,9 @@
     stage.setAttribute('data-busy', '1');
     var r = St.openChest(id); if (!r) return;
     var tm = th(), best = r.result.finds.reduce(function (m, f) { return E.rarityRank(f.rarity) > E.rarityRank(m) ? f.rarity : m; }, 'common');
-    $id('chestHint').textContent = 'Opening…';
     var calm = U.calm();
     function $id(x) { return document.getElementById(x) || { textContent: '', innerHTML: '', style: {}, appendChild: function () { } }; }
-    stage.classList.add('shake'); U.haptic([10, 60, 10, 60, 20]);
+    if (!calm) { stage.classList.add('shake'); U.haptic([10, 60, 10, 60, 20]); }
     setTimeout(function () {
       if (!document.body.contains(stage)) return;
       stage.classList.remove('shake'); stage.classList.add('open');
@@ -100,7 +103,7 @@
       r.result.finds.forEach(function (f, i) {
         var a = Th.findArt(tm, f.id);
         var d = document.createElement('div'); d.className = 'rcard r-' + f.rarity; d.style.animationDelay = (i * 140) + 'ms';
-        d.innerHTML = '<div class="rc-in"><div class="rc-face rc-back">?</div><div class="rc-face rc-front"><span class="em">' + a.icon + '</span><span class="nm">' + esc(a.name) + '</span><span class="tag">' + f.rarity.toUpperCase() + (f.dup ? ' · DUPLICATE' : ' · NEW') + '</span></div></div>';
+        d.innerHTML = '<div class="rc-in"><div class="rc-face rc-back">?</div><div class="rc-face rc-front"><span class="em">' + a.icon + '</span><span class="nm">' + esc(a.name) + '</span><span class="tag">' + f.rarity.toUpperCase() + (f.dup ? ' · +1 SPARE' : ' · NEW') + '</span></div></div>';
         cards.appendChild(d);
         setTimeout(function () { d.classList.add('flipped'); U.sfx('reveal'); if (E.rarityRank(f.rarity) >= 2) U.burstAt(d, { n: 24, spread: 90, colors: [RCOL[f.rarity], '#fff'] }); }, calm ? 0 : 600 + i * 450);
       });
@@ -112,7 +115,7 @@
         var b = document.querySelector('#chestActs button'); if (b) b.focus();
         U.announce('Chest opened. ' + r.result.finds.length + ' finds and ' + r.result.stars + ' Stars.');
       }, calm ? 50 : 800 + r.result.finds.length * 450);
-    }, calm ? 50 : 1500);
+    }, calm ? 0 : 800);
   }
 
   function findSheet(id) {
@@ -128,7 +131,7 @@
   Object.assign(root.App.acts, {
     cseg: function (el) { seg = el.getAttribute('data-v'); root.App.render(); },
     find: function (el) { findSheet(el.getAttribute('data-f')); },
-    'album-info': function () { var tm = th(); U.sheet('How the ' + tm.terms.album + ' works', '<ul style="padding-left:20px;font-weight:600;color:var(--ink-2);line-height:1.6"><li>' + esc(tm.terms.finds) + ' come in sets of 9: four common, three uncommon, one rare, one epic.</li><li>They turn up on your ' + esc(tm.terms.run) + ', ' + esc(tm.terms.trip) + 's and ' + esc(tm.terms.chest.toLowerCase()) + 's.</li><li>Finish a set for a set ' + esc(tm.terms.chest.toLowerCase()) + ' and a trophy for your ' + esc(tm.terms.home) + '.</li><li>Duplicates become Scraps. Later you can trade them with friends or craft any find you’re missing, so every set can be finished.</li><li>Change your look in Me and every ' + esc(tm.terms.find.toLowerCase()) + ' re-skins. You keep all of it.</li></ul>'); },
+    'album-info': function () { var tm = th(); U.sheet('How the ' + tm.terms.album + ' works', '<ul style="padding-left:20px;font-weight:600;color:var(--ink-2);line-height:1.6"><li>' + esc(tm.terms.finds) + ' come in sets of 9: four common, three uncommon, one rare, one epic.</li><li>Spares are extra copies. Your first copy always stays in your ' + esc(tm.terms.album) + '.</li><li>3 spares make 1 of the next kind up. You pick which one.</li><li>3 Epic spares can make any ' + esc(tm.terms.find.toLowerCase()) + ' in that set Shiny.</li><li>Extra copies from power-ups or ' + esc(tm.terms.charge) + ' turn into Stars.</li><li>Finish a set for a trophy for your ' + esc(tm.terms.home) + ' and a title.</li></ul>'); },
     slot: function (el) {
       var i = +el.getAttribute('data-i'), s = S(), tm = th();
       var opts = s.decorOwned.map(function (id) { var d = tm.decor.filter(function (x) { return x.id === id; })[0]; return d ? '<button class="opt" data-act="place" data-i="' + i + '" data-d="' + d.id + '"><span style="font-size:2rem">' + d.icon + '</span><span class="o-t">' + esc(d.name) + '</span></button>' : ''; }).join('');
@@ -140,7 +143,7 @@
     'chest-past': function (el) {
       var tm = th(), c = S().chests.filter(function (x) { return x.id === el.getAttribute('data-c'); })[0]; if (!c) return;
       var r = c.result || { finds: [] };
-      U.sheet(E.CHESTS[c.type].label + ' ' + tm.terms.chest, '<p class="muted" style="font-weight:700">' + esc(srcLabel(c.source)) + ' · opened ' + esc(E.fmtDate(c.openedDay || c.day)) + '</p><div class="opt-list">' + r.finds.map(function (f) { var a = Th.findArt(tm, f.id); return '<button class="opt" data-act="find" data-f="' + f.id + '"><span style="font-size:1.6rem">' + a.icon + '</span><span><span class="o-t" style="display:block">' + esc(a.name) + '</span><span class="o-s">' + f.rarity + (f.dup ? ' · duplicate' : '') + '</span></span></button>'; }).join('') + '</div>' + (r.stars ? '<p style="font-weight:800;margin-top:10px">+' + r.stars + ' ★</p>' : ''));
+      U.sheet(E.CHESTS[c.type].label + ' ' + tm.terms.chest, '<p class="muted" style="font-weight:700">' + esc(srcLabel(c.source)) + ' · opened ' + esc(E.fmtDate(c.openedDay || c.day)) + '</p><div class="opt-list">' + r.finds.map(function (f) { var a = Th.findArt(tm, f.id); return '<button class="opt" data-act="find" data-f="' + f.id + '"><span style="font-size:1.6rem">' + a.icon + '</span><span><span class="o-t" style="display:block">' + esc(a.name) + '</span><span class="o-s">' + f.rarity.charAt(0).toUpperCase() + f.rarity.slice(1) + (f.dup ? ' · spare' : '') + '</span></span></button>'; }).join('') + '</div>' + (r.stars ? '<p style="font-weight:800;margin-top:10px">+' + r.stars + ' ★</p>' : ''));
     },
     'chest-tap': chestTap,
     odds: function () { U.sheet('Chest odds', oddsHtml(), { sub: 'Plain and simple. Same for everyone.' }); }

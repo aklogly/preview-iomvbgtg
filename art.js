@@ -139,6 +139,14 @@
     if (s >= 3) front += '<circle cx="47" cy="99" r="6.5" fill="' + gold + '" stroke="' + goldE + '" stroke-width="1.5"/><path d="M47 95 L48.3 98 L51.4 98.2 L49 100.1 L49.8 103.1 L47 101.4 L44.2 103.1 L45 100.1 L42.6 98.2 L45.7 98Z" fill="#fff6c9"/>';
     if (s >= 4 && kind !== 'gnome' && kind !== 'mushroom') front += grove ? '<path d="M78 30 C86 18 96 18 98 20 C94 28 86 32 78 30Z" fill="#6aa65c"/>' : '<path d="M78 30 C84 14 92 10 96 10 C94 20 88 28 78 30Z" fill="#ff7a3d"/><path d="M80 28 L93 13" stroke="#fff" stroke-width="1.2"/>';
     if (s >= 6) front += '<circle cx="73" cy="99" r="5.5" fill="' + gold + '" stroke="' + goldE + '" stroke-width="1.5"/><path d="M70 92 L73 96 L76 92" stroke="' + capeC + '" stroke-width="2.5" fill="none"/>';
+    // v5.6: a look from the Shop or the Season Pass shows on the companion (a cape and collar). Looks only, no stats.
+    var look = opts.look !== undefined ? opts.look : (St && St.looks && St.looks.equipped && St.looks.equipped.companion) || null;
+    if (look) {
+      var LC = { 'look.basic': grove ? ['#7fb3d5', '#4f86ad'] : ['#c8743a', '#8f4f22'], 'look.deluxe': grove ? ['#b9a6e8', '#7c66c4'] : ['#26306e', '#151b47'] }[look];
+      if (!LC) { var hh = 0; for (var li = 0; li < look.length; li++) hh = (hh * 31 + look.charCodeAt(li)) >>> 0; LC = [['#5aa9d6', '#2f6f9f'], ['#8fd16f', '#4f8f3a'], ['#ffb36b', '#c2611e'], ['#c9b8ff', '#7c66c4']][hh % 4]; }
+      behind += '<path class="look-cape" d="M34 80 C22 104 28 113 40 113 L80 113 C92 113 98 104 86 80 Z" fill="' + LC[0] + '" stroke="' + LC[1] + '" stroke-width="2"/>' + (look === 'look.deluxe' ? '<g fill="#fff6c9"><circle cx="46" cy="102" r="1.8"/><circle cx="62" cy="107" r="1.4"/><circle cx="76" cy="99" r="1.8"/></g>' : '');
+      front += '<path class="look-collar" d="M38 80 Q60 92 82 80 L80 87 Q60 99 40 87Z" fill="' + LC[0] + '" stroke="' + LC[1] + '" stroke-width="1.5"/>';
+    }
     var crowned = cos.indexOf('m365') >= 0;
     if (s >= 7 && !crowned) front += '<path d="M46 27 Q60 20 74 27" stroke="' + (s >= 10 ? gold : '#dfe6ee') + '" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="60" cy="22.5" r="2.6" fill="' + (grove ? '#f4a7a0' : '#7cc4f2') + '"/>';
     // one-of-a-kind milestone cosmetics: day 365 crown, day 730 star cape, day 1000 plume
@@ -251,6 +259,8 @@
     today: '<path d="M12 3v2M12 19v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M3 12h2M19 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/><circle cx="12" cy="12" r="4.5"/>',
     collection: '<rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/>',
     meds: '<rect x="2.8" y="8.5" width="18.4" height="7" rx="3.5" transform="rotate(-35 12 12)"/><path d="M9.3 8.2l5.4 7.6"/>',
+    // v5.6 (A11): the My list tab is a checklist, not a capsule (the capsule read as a chain link at tab size).
+    mylist: '<path d="M9.5 6.5h10M9.5 12h10M9.5 17.5h10"/><path d="M3.8 6.4l1.3 1.3 2.3-2.5M3.8 11.9l1.3 1.3 2.3-2.5M3.8 17.4l1.3 1.3 2.3-2.5"/>',
     me: '<circle cx="12" cy="8" r="4"/><path d="M4 21c1.2-4 4.4-6 8-6s6.8 2 8 6"/>',
     back: '<path d="M15 5l-7 7 7 7"/>',
     chev: '<path d="M9 5l7 7-7 7"/>',
@@ -302,7 +312,8 @@
   var ITEM_ICONS = {
     med: '<path d="M10.5 20.5l10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7z"/><path d="M8.5 8.5l7 7"/>',
     vitamin: '<path d="M12 3.5c3.2 3.6 5 6.6 5 9.3a5 5 0 0 1-10 0c0-2.7 1.8-5.7 5-9.3z"/><path d="M10 13.5a2 2 0 0 0 2 2"/>',
-    habit: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M9.5 12.2l1.7 1.7 3.4-3.6"/>'
+    habit: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/><path d="M9.5 12.2l1.7 1.7 3.4-3.6"/>',
+    other: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>' // v5.6 A4: "Other" (its own label)
   };
   function itemIcon(item, cls) {
     var t = (item && item.type) || 'med';

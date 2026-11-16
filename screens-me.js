@@ -52,16 +52,18 @@
         row('close', 'Delete my account', 'Removes everything, right away', A.icon('chev'), 'delete-acct') +
       '</div>' +
       '<div class="set-group">' + row('info', 'How Kindling stays fair', 'Taking more never earns more', A.icon('chev'), 'fair-play') + '</div>' +
+      // v5.6 Part B: Crew (from day 10 of play) and Shop (from day 14), never for kid or teen profiles. Demo can open them early.
+      (St.crewOn() && (s.camp.total >= 10 || s.flags.socialOpen || s.crew) ? '<div class="sec-h"><h2>Together</h2></div><div class="set-group">' + row('people', esc(tm.terms.crew), s.crew ? 'Sample ' + esc(tm.terms.crew.toLowerCase()) + ' · ' + s.crew.week.shared + ' of ' + s.crew.week.tiers[2] + ' this week' : 'Play alongside a few others. Sample only in this preview.', A.icon('chev'), 'go', ' data-to="crew"') + '</div>' : '') +
+      (St.shopOn() && (s.camp.total >= 14 || s.flags.socialOpen) ? '<div class="set-group">' + row('sparkle', 'Shop', 'Looks and the Season Pass. Preview: no real purchases.', A.icon('chev'), 'go', ' data-to="shop"') + '</div>' : '') +
       '<div class="sec-h"><h2>Coming soon</h2></div><div class="set-group">' +
         row('people', 'Family profiles', 'Log for a child or a parent, each with their own world', '<span class="preview-tag">Preview</span>', 'go', ' data-to="family"') +
-        row('people', 'Crews', 'Play alongside 4 or more friends', '<span class="preview-tag">Preview</span>', 'go', ' data-to="crew"') +
       '</div>' +
       '<div class="set-group">' + row('info', 'Help', 'Questions, contact us', A.icon('chev'), 'fake-call', ' data-who="support team"') + '</div>' +
-      '<button class="about" data-act="logo-tap" style="display:flex;flex-direction:column;align-items:center;gap:4px;margin:18px auto 30px;border:0;background:none;cursor:pointer;color:var(--muted);font-weight:700;font-size:.85rem" aria-label="About Kindling">' + A.logo(40) + '<span style="font-weight:900;color:var(--ink);font-size:1rem">Kindling</span><span>The daily game your meds power · v5.5 prototype</span></button>';
+      '<button class="about" data-act="logo-tap" style="display:flex;flex-direction:column;align-items:center;gap:4px;margin:18px auto 30px;border:0;background:none;cursor:pointer;color:var(--muted);font-weight:700;font-size:.85rem" aria-label="About Kindling">' + A.logo(40) + '<span style="font-weight:900;color:var(--ink);font-size:1rem">Kindling</span><span>The daily game your meds power · v5.6 prototype</span></button>';
   }
   function fairPlay() {
     var tm = th();
-    U.sheet('How Kindling stays fair', '<div class="promise" style="margin:0"><ul><li>Taking more never earns more. Everyone’s day is worth the same.</li><li>As-needed medicines earn the same small amount, used or not.</li><li>Nothing about your medicines ever goes down. Logged after the usual time? Still counts.</li><li>' + esc(tm.camp.counts) + ' days you play, never doses. Best ever and total days only go up.</li><li>An honest “didn’t take” still earns points.</li><li>Games and leaderboards never see your medicines. Power-ups only add finds, never a score.</li><li>We never tell you to take a dose. That’s between you and your care team.</li><li>Nothing is for sale. Chest odds are always shown.</li></ul></div>');
+    U.sheet('How Kindling stays fair', '<div class="promise" style="margin:0"><ul><li>Taking more never earns more. Everyone’s day is worth the same.</li><li>As-needed medicines earn the same small amount, used or not.</li><li>Nothing about your medicines ever goes down. Logged after the usual time? Still counts.</li><li>' + esc(tm.camp.counts) + ' days you play, never doses. Best ever and total days only go up.</li><li>An honest “didn’t take” still earns points.</li><li>Games and leaderboards never see your medicines. Power-ups only add finds, never a score.</li><li>We never tell you to take a dose. That’s between you and your care team.</li><li>Chests, spares, gear and anything that helps you play are never for sale. The Shop sells looks only. Chest odds are always shown.</li></ul></div>');
   }
 
   function privacy() {
@@ -88,22 +90,10 @@
       '<div class="card"><h3>How it works</h3><ul style="padding-left:20px;font-weight:600;color:var(--ink-2);line-height:1.6"><li>Dan taps “pill out” and hands the phone over. Leo snaps the piece into his own world.</li><li>Each person has their own day worth the same amount. Adding people never adds points.</li><li>Dan earns a small, capped helper bonus for logging for others.</li><li>Under 13: a sticker book with fixed rewards. No chests, no social, no prize draws.</li><li>Kids’ profiles have no Campfire or day count. Their companion still grows as they play.</li><li>Leo’s profile belongs to Dan’s account. Leo has no login.</li></ul></div><div style="height:20px"></div>';
   }
 
-  function crew() {
-    return '<div class="nav-h"><button class="back" data-act="back">' + A.icon('back') + 'Me</button><div class="title">Crews</div></div>' +
-      '<div style="margin:0 16px 10px"><span class="preview-tag">Preview · coming in a later release</span></div>' +
-      '<div class="tile run flat-preview" style="margin-top:6px"><div class="t-kicker">Preview · Crew of 6</div><div class="t-title">The Night Owls</div><div class="t-body">This week: 31 of 40 to the crew chest</div>' +
-      '<div style="height:14px;background:rgba(255,255,255,.25);border-radius:8px;margin-top:12px;overflow:hidden"><i style="display:block;height:100%;width:77%;background:#ffd65e;border-radius:8px"></i></div>' +
-      '<div class="row" style="margin-top:12px;gap:-6px">' + ['#ff7a3d', '#14a394', '#ffd65e', '#e98bc0', '#7cc4f2', '#b48cff'].map(function (c) { return '<span class="avatar" style="background:' + c + ';box-shadow:0 0 0 2px rgba(255,255,255,.7);margin-right:-6px"></span>'; }).join('') + '</div></div>' +
-      '<div class="card"><h3>What counts</h3><p>Checking in (any answer, including “didn’t take”) and playing the daily games. Never medicines.</p></div>' +
-      '<div class="card"><h3>What nobody sees</h3><p>Who did what. There are no per-person numbers, no “last active,” and the crew total only shows once there are 4 or more of you.</p></div>' +
-      '<div class="card"><h3>Everyone wins together</h3><p>Hit a milestone and every member gets the same crew chest.</p></div><div style="height:20px"></div>';
-  }
-
   var taps = [], tapTimer = null;
   root.App.screens.me = render;
   root.App.screens.privacy = privacy;
   root.App.screens.family = family;
-  root.App.screens.crew = crew;
   Object.assign(root.App.acts, {
     'set-toggle': function (el) {
       var k = el.getAttribute('data-k'), st = S().settings;

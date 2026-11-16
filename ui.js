@@ -47,7 +47,7 @@
     wrap.style.position = 'absolute'; wrap.style.inset = '0';
     wrap.innerHTML = html;
     overlayRoot().appendChild(wrap);
-    var rec = { el: wrap, onClose: opts.onClose };
+    var rec = { el: wrap, onClose: opts.onClose, beforeClose: opts.beforeClose };
     stack.push(rec);
     var f = wrap.querySelector('[data-autofocus]') || wrap.querySelector('button');
     if (f && !opts.noFocus) setTimeout(function () { try { f.focus({ preventScroll: true }); } catch (e) { } }, 60);
@@ -56,6 +56,7 @@
   function closeOverlay(rec) {
     rec = rec || stack[stack.length - 1]; if (!rec) return;
     var i = stack.indexOf(rec); if (i >= 0) stack.splice(i, 1);
+    if (rec.beforeClose) { try { rec.beforeClose(); } catch (e) { } } // e.g. keep typed text before the sheet goes away
     if (rec.el.parentNode) rec.el.parentNode.removeChild(rec.el);
     if (rec.onClose) rec.onClose();
     if (!stack.length) setTimeout(flushToasts, 120);
@@ -79,6 +80,7 @@
     if (stack.length && !opts.force) { pending = [{ msg: msg, opts: opts }]; announce(String(msg).replace(/<[^>]+>/g, '')); return; }
     show(msg, opts);
   }
+  function clearToast() { clearTimeout(toastTimer); current = null; pending = []; var old = document.querySelectorAll('#view .toast'); for (var i = 0; i < old.length; i++) old[i].remove(); }
   function flushToasts() { if (stack.length || !pending.length) return; var p = pending.shift(); pending = []; show(p.msg, p.opts); }
   /* Inline banner directly under the top bar. It pushes content down (never overlays it), then collapses. */
   var current = null;

@@ -1375,7 +1375,7 @@
       openSheet('<div class="rg-intro-badge">' + svg(TI.obj) + '</div>' +
         '<div class="rg-kicker">' + esc(puzzleLabel) + ' &middot; ' + DIFF_LABEL[shownDiff] + '</div>' +
         '<h3 class="rg-sheet-h rg-intro-h">' + esc(titleText) + '</h3>' + introControls() +
-        '<p class="rg-sheet-p">' + esc(intro) + '</p>' +
+        (global.Arcade && global.Arcade._util && global.Arcade._util.rulesWrap ? global.Arcade._util.rulesWrap(opts, '<p class="rg-sheet-p">' + esc(intro) + '</p>') : '<p class="rg-sheet-p">' + esc(intro) + '</p>') +
         '<div class="rg-intro-facts"><span><b>' + board.stepsMax + '</b> steps</span><span><b>3</b> ' + T.objs + '</span><span><b>' + (counts.find + counts.mystery) + '</b> finds</span></div>' +
         puBlock +
         '<div class="rg-sheet-actions"><button type="button" class="rg-btn rg-primary rg-big" data-act="start" data-autofocus>Let’s go</button></div>', 'is-intro');
@@ -1554,8 +1554,9 @@
         var finds = [];
         haul.forEach(function (h) {
           var f = { id: 'find.' + h.rarity + '.' + h.item, rarity: h.rarity };
+          if (h.lucky || h.via === 'magnet' || st.powers.lens) f.pu = true; // v5.6: made by a power-up (fuel-copy rule); a Lens run tags every find
           finds.push(f);
-          if (h.doubled) finds.push({ id: f.id, rarity: f.rarity });
+          if (h.doubled) finds.push({ id: f.id, rarity: f.rarity, pu: true });
         });
         var consolation = false;
         if (practice) finds = [];

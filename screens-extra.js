@@ -27,7 +27,7 @@
       '<div class="set-group"><button class="set-row" data-act="draw-how"><span class="sr-ic">' + A.icon('info') + '</span><span class="sr-main"><span class="sr-t" style="display:block">How it works</span><span class="sr-s">Tickets, odds, winners</span></span>' + A.icon('chev') + '</button>' +
       '<button class="set-row" data-act="draw-free"><span class="sr-ic">' + A.icon('note') + '</span><span class="sr-main"><span class="sr-t" style="display:block">Free entry</span><span class="sr-s">No purchase or app activity needed</span></span>' + A.icon('chev') + '</button>' +
       '<button class="set-row" data-act="draw-rules"><span class="sr-ic">' + A.icon('shield') + '</span><span class="sr-main"><span class="sr-t" style="display:block">Official rules (sample)</span><span class="sr-s">18+, where permitted</span></span>' + A.icon('chev') + '</button></div>' +
-      '<p class="muted" style="margin:0 18px 30px;font-size:.82rem;font-weight:600">Prototype: real-value prizes would launch only after legal review. Nothing is for sale. Winners are never announced by name.</p>';
+      '<p class="muted" style="margin:0 18px 30px;font-size:.82rem;font-weight:600">Prototype: real-value prizes would launch only after legal review. Entries are never for sale. Winners are never announced by name.</p>';
   }
   function drawNight() {
     U.closeAll();
@@ -77,10 +77,13 @@
       notifs = (last ? n('earlier', allSet, 'Logged.') : '') + n('later', 'Next check-in: ' + esc(open.label) + ' · ' + at, 'We’ll remind you then.');
     } else {
       var many = open.doses.length > 1, took = many ? (open.doses.some(function (d) { var m = St.medById(d.medId); return m && E.itemType(m) === 'habit'; }) ? 'All ' + open.doses.length + ' done' : 'Took all ' + open.doses.length) : (hab ? 'Done' : 'Took it');
-      var two = !hab && open.doses.some(function (d) { var m = St.medById(d.medId); return m && E.itemType(m) !== 'habit' && (m.twoStep == null ? s.settings.twoStep : !!m.twoStep); });
-      var sOut = hab ? b('took', took) : two ? b('pillout', many ? 'Pills out' : 'Pill out') + b('took', took) : b('took', took) + b('pillout', 'Pill out');
+      var pillish = open.doses.some(function (d) { var m = St.medById(d.medId), t = m && E.itemType(m); return t === 'med' || t === 'vitamin'; });
+      var two = !hab && open.doses.some(function (d) { var m = St.medById(d.medId), t = m && E.itemType(m); return m && (t === 'med' || t === 'vitamin') && (m.twoStep == null ? s.settings.twoStep : !!m.twoStep); });
+      var sOut = hab || !pillish ? b('took', took) : two ? b('pillout', many ? 'Pills out' : 'Pill out') + b('took', took) : b('took', took) + b('pillout', 'Pill out');
       notifs = n('now', 'Time for your ' + at + ' check-in', names ? esc(names) : 'Tap when you’re ready.', sOut);
     }
+    // v5.6 (A7): the refill reminder, every day until it's answered. No name unless names are turned on in Me.
+    St.refillsDue().forEach(function (m) { var dl = St.daysLeft(m); notifs += n('9:00 AM', 'Refill time' + (s.settings.discreet ? '' : ' for ' + esc(m.name)), dl > 0 ? 'About ' + dl + ' day' + (dl === 1 ? '' : 's') + ' left.' : 'It may be out now.', '<button data-act="lk-refill" data-a="in" data-m="' + m.id + '">Refill’s in</button><button data-act="lk-refill" data-a="no" data-m="' + m.id + '">Not needed</button><button data-act="lk-refill" data-a="other" data-m="' + m.id + '">Something else</button>'); });
     if (s.trip.status === 'back' && !St.tripOvernight()) notifs += n('7:30 AM', esc(s.comp.name) + ' is back from ' + esc((root.Story.T(s.theme).quests[s.trip.quest] || { name: 'a trip' }).name) + ' 📮', 'There’s a story waiting for you.');
     if (St.campOn() && s.settings.campReminder !== false && s.settings.gameNotifs > 0 && s.camp.count > 0 && !E.campLitOn(s.camp, s.day) && !E.campResting(s.camp, s.day) && s.clock >= 1080) notifs += n('7:00 PM', esc(th().camp.reminder.replace('{name}', s.comp.name)), 'Come say hi when you have a minute.');
     U.openOverlay('<div class="lock" role="dialog" aria-label="Lock screen preview"><div class="lk-date">' + E.fmtDateLong(s.day) + '</div><div class="lk-time">' + E.fmtTime(s.clock).replace(/ (AM|PM)/, '') + '</div>' + notifs +
@@ -176,7 +179,10 @@
       var presets = [['logan', 'Founder tour', '1 daily med, two-step'], ['maya', 'Maya', '1 morning stimulant'], ['harold', 'Harold', '14 meds · 4 stacks · Simple'], ['priya', 'Priya', 'Weekly injection · Boss Day'], ['dan', 'Dan + Leo', 'Caregiver preview'], ['fresh', 'Fresh start', 'Onboarding from the top']];
       var campCtl = [['day6', 'Campfire day 6', 'Milestone tomorrow'], ['skip1', 'Skip a day', 'Shield used'], ['skip2', 'Skip 2 days', 'Relight offer'], ['rest', 'Rest mode on', '3-day break'], ['grow', 'Growth', 'Next stage tomorrow']];
       var rpgCtl = [['day7', 'Day 7: story choice', 'Weekly page, then Feed'], ['tree', 'Skill tree', 'Jump to day 45 (fork open)'], ['builds', 'Same quest, two builds', 'Side by side'], ['book', 'Open the Book', 'Prologue onward'], ['d100', 'Day 100', 'Epic chest: choose 1 of 3'], ['d365', 'Day 365', 'Legendary: choose 1 of 3'], ['quiet', 'A quiet page', 'After 3 quiet days'], ['fairy', 'Grove: fairy', 'Garden spirit'], ['gnome', 'Grove: gnome', 'Garden spirit'], ['exp', 'Back to Expedition', 'Fox kit']];
-      var triggers = [['welcome', 'Welcome back', 'After 4 quiet days'], ['tier2', 'Barrier: Tier 2', 'Pharmacy out of stock'], ['tier3', 'Barrier: Tier 3', 'Side effects'], ['highrisk', 'High-risk lapse', 'Plain safety card'], ['drawnight', 'Draw night', 'Grand Draw reveal'], ['pudrop', 'Power-up drop', 'Power Bank pops'], ['lock', 'Lock screen', 'Reminder + pill-out nudge'], ['share', 'Share card', 'Run grid, no health info'], ['reset', 'Reset the demo', 'Clears the demo save only']];
+      var progCtl = [['spares', 'Give spares', '6 of each kind in one set'], ['epics', 'Give Epic spares', '3 in one set, for Shiny'], ['d30', 'Day 30', 'Workbench opens, spare piles'], ['bench', 'Workbench open now', 'Skips the day-30 lock'], ['dupgear', 'Duplicate gear', 'On the next return'],
+        ['open', 'Crew + Shop now', 'Skips the day 10 / 14 wait'], ['join', 'Join the sample crew', 'Labelled sample'], ['crewday', 'Crew: next day', 'Moves the shared meter'], ['gift', 'Crew: receive a gift', 'From a sample member'], ['moment', 'Crew: a moment', 'A member posts one'],
+        ['shopreset', 'Shop: reset preview', 'Clears preview purchases'], ['kid', S().profile && S().profile.kid ? 'Kid profile: on' : 'Kid profile: off', 'Shop, Crew, Pass disappear'], ['fair', 'Fairness check', 'Spark 0 vs 100, same plays']];
+      var triggers = [['welcome', 'Welcome back', 'After 4 quiet days'], ['tier2', 'Barrier: Tier 2', 'Pharmacy out of stock'], ['tier3', 'Barrier: Tier 3', 'Side effects'], ['refill', 'Refill reminder', 'About 6 days of supply left'], ['highrisk', 'High-risk lapse', 'Plain safety card'], ['drawnight', 'Draw night', 'Grand Draw reveal'], ['pudrop', 'Power-up drop', 'Power Bank pops'], ['lock', 'Lock screen', 'Reminder + pill-out nudge'], ['share', 'Share card', 'Run grid, no health info'], ['reset', 'Reset the demo', 'Clears the demo save only']];
       U.openOverlay('<div class="demo" role="dialog" aria-label="Demo controls"><div class="demo-sheet"><button class="demo-close" data-act="demo-close">Close</button>' +
         '<h2>⚙️ Demo controls</h2><div class="d-sub">Prototype only, not part of the product.' + (s.today ? ' ' + esc(d) + ' · day ' + s.day + (s.preset ? ' · ' + esc(s.preset) : '') : '') + '</div>' + liveSec +
         '<div class="d-lab">Demo (your real progress is untouched)</div>' +
@@ -184,6 +190,7 @@
         '<div class="d-lab">Demo clock</div><div class="demo-clock"><button data-act="demo-clock" data-d="-60">− 1h</button><b>' + E.fmtTime(s.clock) + '</b><button data-act="demo-clock" data-d="60">+ 1h</button></div>' +
         '<div class="d-lab">People</div><div class="demo-grid">' + presets.map(function (p) { return '<button class="' + (p[0] === 'logan' ? 'hl' : '') + '" data-act="demo-preset" data-p="' + p[0] + '" data-label="' + p[1] + '">' + p[1] + '<small>' + p[2] + '</small></button>'; }).join('') + '</div>' +
         '<div class="d-lab">Companion RPG + the Book (v5.4)</div><div class="demo-grid">' + rpgCtl.map(function (p) { return '<button data-act="demo-rpg" data-t="' + p[0] + '">' + p[1] + '<small>' + p[2] + '</small></button>'; }).join('') + '</div>' +
+        '<div class="d-lab">Progress, Crew and Shop (v5.6)</div><div class="demo-grid">' + progCtl.map(function (p) { return '<button data-act="demo-prog" data-t="' + p[0] + '">' + p[1] + '<small>' + p[2] + '</small></button>'; }).join('') + '</div>' +
         '<div class="d-lab">Campfire (v5.3)</div><div class="demo-grid">' + campCtl.map(function (p) { return '<button data-act="demo-camp" data-t="' + p[0] + '">' + p[1] + '<small>' + p[2] + '</small></button>'; }).join('') + '</div>' +
         '<div class="d-lab">Moments</div><div class="demo-grid">' + triggers.map(function (p) { return '<button data-act="demo-trig" data-t="' + p[0] + '">' + p[1] + '<small>' + p[2] + '</small></button>'; }).join('') + '</div>' +
         '</div></div>');
@@ -206,6 +213,10 @@
       var open = St.openStack();
       if (open && open.kind === 'dose') St.checkIn(open.id, 'didnt');
       St.answerBarrier(t === 'tier2' ? 'stock' : 'side', m && m.id);
+      root.App.render();
+    } else if (t === 'refill') {
+      var rm = s.meds.filter(function (x) { return !E.isAsNeeded(x) && E.itemType(x) !== 'habit' && !E.isEnded(x, s.day); })[0];
+      if (rm) { var per = E.unitsOn(rm, s.day) || E.expandTimes(E.schedOf(rm).times).length; rm.supply = 6 * per; rm.supplySetOn = s.day; rm.supplyV = 2; rm.refill = Object.assign({}, rm.refill || {}, { askAgain: null, off: false }); St.save(); }
       root.App.render();
     } else if (t === 'highrisk') {
       var hr = s.meds.filter(function (x) { return x.highRisk; })[0];
@@ -296,6 +307,34 @@
     if (msg) U.toast(esc(msg), { ms: 4500 });
   }
 
+  /* v5.6 Part B demo controls (spec §6.5). All run on the demo save, through the same engine. */
+  function progDemo(t) {
+    St.enterDemo();
+    var s = S(), P = root.Progress; U.closeAll(); closeRun();
+    if (!s.today) { U.toast('Finish onboarding or pick a person first.'); return; }
+    var msg = '';
+    if (t === 'spares') { P.idsIn(1).forEach(function (id) { var f = E.FIND_BY_ID[id]; if (f.rarity !== 'epic') { s.owned[id] = (s.owned[id] || 0) + (f.rarity === 'common' ? 6 : f.rarity === 'uncommon' ? 4 : 3); s.found[id] = true; } }); msg = 'Spares added. Open Collection to combine.'; }
+    else if (t === 'epics') { s.owned['s1-9'] = (s.owned['s1-9'] || 0) + 4; s.found['s1-9'] = true; msg = '3 Epic spares added. Open Collection, then Combine, to make one shine.'; }
+    else if (t === 'd30') { St.jumpTo(30); s = S(); msg = 'Day 30: the ' + th().terms.bench + ' is open.'; }
+    else if (t === 'bench') { s.flags.benchOpen = true; msg = 'The ' + th().terms.bench + ' is open.'; }
+    else if (t === 'dupgear') { s.flags.dupGearNext = true; msg = 'The next return brings a piece of gear you own.'; }
+    else if (t === 'open') { s.flags.socialOpen = true; msg = 'Crew and Shop are in Me.'; }
+    else if (t === 'join') { s.flags.socialOpen = true; St.joinCrew(); msg = St.crewOn() ? 'You joined the sample crew.' : 'Crews are for grown-up profiles.'; }
+    else if (t === 'crewday') { if (!s.crew) St.joinCrew(); if (s.crew) { P.crewEndDay(s, s.day); s.crew.week.mineDay = s.day; } msg = 'The crew meter moved (a sample day).'; }
+    else if (t === 'gift') { if (!s.crew) St.joinCrew(); if (s.crew) s.crew.gifts.inbox.push({ from: 'BraveOtter-412', id: E.FINDS.filter(function (f) { return f.rarity === 'common'; })[(s.crew.gifts.inbox.length + s.day) % 16].id }); msg = 'A gift is waiting in the crew.'; }
+    else if (t === 'moment') { if (!s.crew) St.joinCrew(); if (s.crew) s.crew.moments.unshift({ id: 'ms' + Date.now(), handle: 'MossyFinch-077', species: 'fox', kind: 'set', text: 'MossyFinch-077 finished a set!', day: s.day, cheers: 2, mine: false, cheered: null }); msg = 'A crew mate shared a moment.'; }
+    else if (t === 'shopreset') { St.resetShop(); msg = 'Preview purchases cleared.'; }
+    else if (t === 'kid') { s.profile.kid = !s.profile.kid; msg = s.profile.kid ? 'Kid profile on.' : 'Kid profile off.'; }
+    else if (t === 'fair') {
+      var r = St.fairnessCheck(); St.save(); root.App.render();
+      var gl = function (j) { var o = JSON.parse(j), k = Object.keys(o); return k.length ? k.map(function (id) { return esc(root.Story.T(S().theme).gear[id] || id) + ' +' + o[id]; }).join(', ') : 'none yet'; };
+      U.sheet('Fairness check', '<p style="font-weight:700">7 days where every dose is “Didn’t take” (Spark 0) and 7 where every dose is taken (Spark 100), with the same games and feeding.</p>' + r.runs.map(function (x) { return '<div class="fact"><span class="f-ic" style="background:var(--neutral-bg)">' + x.spark + '</span><div><div class="f-t">Spark ' + x.spark + '</div><div class="f-s">Spares ' + x.spares + ' · Gear levels: ' + gl(x.plus) + ' · ' + esc(th().terms.crew) + ' points ' + esc(String(x.crew).split('|')[0]) + ' · Season step ' + x.step + '</div><div class="f-s">Found ' + x.found + ' · Stars ' + x.stars + '</div></div></div>'; }).join('') +
+        '<p style="font-weight:800;margin-top:10px">' + (r.same ? '✓ Spares, gear levels, ' + esc(th().terms.crew.toLowerCase()) + ' points and the Season step match. Only found entries and Stars may differ.' : 'These should match. Please report this.') + '</p>' +
+        '<p class="muted" style="font-weight:600">Answering a check-in (any answer, same value) gives companion XP. A higher level helps quests a little. Answers never create spares directly, and never add ' + esc(th().terms.crew.toLowerCase()) + ' points, Season steps or Shop value.</p>');
+      return;
+    }
+    St.save(); root.App.ui.stack = []; root.App.ui.tab = 'today'; root.App.render(); if (msg) U.toast(msg);
+  }
   root.Extra = { drawNight: drawNight, lockscreen: lockscreen, shareCard: shareCard, openRun: openRun, closeRun: closeRun };
   root.Demo = Demo;
   root.App.screens.draw = draw;
@@ -306,6 +345,7 @@
     'age-ok': function () { var v = +((document.getElementById('byear') || {}).value || 0); var yr = new Date().getFullYear(); if (!v || v < 1900 || v > yr) { U.toast('Enter a 4-digit year.'); return; } S().flags.age18 = (yr - v) >= 18; St.save(); root.App.render(); },
     'draw-claim': function () { U.closeAll(); U.sheet('Claim your prize', '<p style="font-weight:600">In the real draw: a quick identity check (18+), then a shipping address. Your name is never published.</p><span class="legal-tag" style="margin-top:10px">Sample prize — pending legal review</span><button class="btn btn-dark btn-block" style="margin-top:14px" data-act="sheet-close">Got it</button>'); },
     lockscreen: function () { lockscreen(); },
+    'lk-refill': function (el) { var a = el.getAttribute('data-a'), id = el.getAttribute('data-m'); U.closeAll(); root.App.render(); var fake = { getAttribute: function (k) { return k === 'data-m' ? id : null; } }; root.App.acts[a === 'in' ? 'refill-in' : a === 'no' ? 'refill-no' : 'refill-other'](fake); },
     'lk-earlier': function (el) { var sid = el.getAttribute('data-s'); U.closeAll(); root.App.ui.stack = []; root.App.ui.tab = 'today'; root.App.render(); root.TodayUI.earlierSheet(sid); },
     'lk-close': function () { U.closeAll(); root.App.render(); },
     lk: function (el) {
@@ -337,6 +377,7 @@
     'demo-preset': function (el) { var p = el.getAttribute('data-p'); U.closeAll(); closeRun(); St.enterDemo(); root.TodayUI.ui.other = false; root.App.ui.stack = []; root.App.ui.tab = 'today'; if (p === 'fresh') { St.freshDemo(); root.Onboarding.reset(); } else { St.loadPreset(p); root.Onboarding.state().active = false; root.CollectionUI.setSeg('album'); } root.App.render(); var v = document.getElementById('view'); if (v) v.scrollTop = 0; },
     'demo-trig': function (el) { trigger(el.getAttribute('data-t')); },
     'demo-camp': function (el) { campDemo(el.getAttribute('data-t')); },
-    'demo-rpg': function (el) { rpgDemo(el.getAttribute('data-t')); }
+    'demo-rpg': function (el) { rpgDemo(el.getAttribute('data-t')); },
+    'demo-prog': function (el) { progDemo(el.getAttribute('data-t')); }
   });
 })(window);

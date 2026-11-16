@@ -2,7 +2,7 @@
  * Actions mutate the state and return an "fx" description the UI turns into animation. */
 (function (root) {
   'use strict';
-  var E = root.Engine, R = root.RPG;
+  var E = root.Engine, R = root.RPG, P = root.Progress;
   // v5.5 storage: Live and Demo are separate saves, so demo actions never touch real progress. A v5.4 save is not migrated.
   var KEYS = { live: 'kindling-v55-live', demo: 'kindling-v55-demo', mode: 'kindling-v55-mode' };
   function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
@@ -24,13 +24,15 @@
       trip: { status: 'home' },
       life: { starsEarned: 0, xp: 0, finds: 0, checkins: 0, runs: 0 },
       flags: { wbLast: null, lastActiveDay: null, highRisk: null, assist: null, drawResult: null, pendingWelcome: false, careQuests: {} },
-      people: false, seq: 1,
+      people: false, seq: 1, rulesSeen: {},
       // v5.3 Campfire + growth (game state only; never read by the health record, never written by it)
       camp: E.campBlank(), profile: { kid: false }, cosmetics: [],
       // v5.4 companion RPG (game state only; dose-blind: never read by, never written to, the health record)
-      compLevel: { level: 1, xp: 0 }, inventory: { bag: [], equipped: { tool: null, garb: null, trinket: null } },
+      compLevel: { level: 1, xp: 0 }, inventory: { bag: [], plus: {}, equipped: { tool: null, garb: null, trinket: null } },
       rpg: { nodes: {}, fork: null, path: null, returns: 0, packedLast: null },
-      book: { pages: [{ kind: 'prologue', day: 1 }], journal: [], quietLast: null, weekly: {}, spinePending: false }
+      book: { pages: [{ kind: 'prologue', day: 1 }], journal: [], quietLast: null, weekly: {}, spinePending: false },
+      // v5.6 Part B (game state only; dose-blind): found/fuel/shiny specimens, gear levels, "Look for", the sample Crew, the Shop
+      found: {}, fuel: {}, shiny: {}, quest: { lookFor: 'any' }, crew: null, shop: P.blankShop(), looks: { equipped: {}, owned: [] }
     };
   }
 
@@ -38,7 +40,7 @@
   function keyFor(st) { return st.clockMode === 'live' ? KEYS.live : KEYS.demo; }
   function save() { lsSet(keyFor(S), JSON.stringify(S)); }
   function parse(raw) {
-    try { var o = JSON.parse(raw || 'null'); if (o && o.v === 55) { var b = blank(); var out = Object.assign(b, o); out.settings = Object.assign(blank().settings, o.settings || {}); if (!out.inventory.bag) out.inventory = b.inventory; if (!out.book.pages) out.book = blank().book; return out; } } catch (e) { }
+    try { var o = JSON.parse(raw || 'null'); if (o && o.v === 55) { var b = blank(); var out = Object.assign(b, o); out.settings = Object.assign(blank().settings, o.settings || {}); if (!out.inventory.bag) out.inventory = b.inventory; if (!out.book.pages) out.book = blank().book; migrateSave(out); P.migrate(out); return out; } } catch (e) { }
     return null;
   }
   // Boot: load whichever save is active (Live by default). Reload keeps the mode that was active.
@@ -119,6 +121,38 @@
     save(); return { paid: false };
   }
   function nid(p) { return (p || 'x') + (S.seq++); }
+  /* v5.6 item migration (runs on load, presets, onboarding and every save; idempotent):
+   *  - A6: an "every few hours" schedule becomes its expanded list of times.
+   *  - A3: v5.5 filled "How many" with a default ("1 pill" / "1 capsule") nobody typed; those exact defaults are cleared so
+   *    the free-text field starts empty. Anything else the person picked stays as it was.
+   *  - A3: supply was "days' worth of scheduled use"; it is now a count (pills, mL, puffs...) that drops by the amount's
+   *    leading number each dose. Old values are converted so "About N days left" reads the same as before. */
+  var OLD_DEFAULT_AMOUNT = { med: '1 pill', vitamin: '1 capsule' };
+  // QA P1-4: earlier builds filled in a supply of 30 nobody typed. Clear it if it was never touched (same value since the day
+  // the item was made, no refill, no edit). Presets carry their own numbers and no createdDay, so they're left alone.
+  function clearDefaultSupply(item) {
+    if (!item || item.supply == null || item.supplyV >= 3) return;
+    var untouched = item.createdDay != null && item.supplySetOn === item.createdDay && !(item.refill && (item.refill.lastOn != null || item.refill.lead != null || item.refill.offOn != null));
+    var times = item.schedule ? E.expandTimes(E.schedOf(item).times).length : 1;
+    var dflt = item.supplyV === 2 ? (item.supplyStart == null || item.supplyStart === 30 || item.supply === 30 * times) : true;
+    if (untouched && dflt && (item.supply === 30 || item.supply === 30 * times || item.supplyStart === 30)) { item.supply = null; delete item.supplySetOn; delete item.supplyStart; }
+    item.supplyV = 3;
+  }
+  function normalizeItem(item) {
+    if (!item) return item;
+    if (item.schedule) E.migrateItemTimes(item);
+    if (!(item.supplyV >= 2)) {
+      if (item.amount && OLD_DEFAULT_AMOUNT[item.type || 'med'] === item.amount && !(item.schedule && item.schedule.amounts)) item.amount = '';
+      if (item.supply != null) {
+        var sc = E.schedOf(item), times = E.expandTimes(sc.times);
+        var perDueDay = E.isAsNeeded(item) ? 1 : times.reduce(function (a, t) { return a + E.amountUnits(E.amountFor(item, t)); }, 0) || 1;
+        item.supply = Math.round(item.supply * perDueDay * 100) / 100;
+      }
+      item.supplyV = 2;
+    }
+    return item;
+  }
+  function migrateSave(o) { (o.meds || []).forEach(function (m) { if (m.supplyV === 3) { normalizeItem(m); return; } normalizeItem(m); clearDefaultSupply(m); }); }
 
   /* ---------- day lifecycle ---------- */
   function startDay(dayNum, clock) {
@@ -165,11 +199,15 @@
     for (var i = 0; i < r.drops; i++) { var t = E.nextPowerUp(S.puDropped++); drops.push(addPowerUp(t, sourceLabel)); }
     return drops;
   }
-  function addFind(id) { S.owned[id] = (S.owned[id] || 0) + 1; S.life.finds++; }
+  /* v5.6 Part B: every specimen arrives with a source. A power-up or Spark-provision copy you already own becomes 25 Stars
+   * (never a spare); a first copy from those sources is found but locked. See progress.js. */
+  function addFind(id, src) { var r = P.addFind(S, id, src || 'game'); if (r.stars) addStars(r.stars); return r; } // lifetime finds are counted in Progress.addFind (every source)
+  // What play has given you (a locked first copy from a power-up doesn't count), so "prefer new" never leans on doses.
+  function playOwned() { var o = {}; Object.keys(S.owned).forEach(function (id) { var n = (S.owned[id] || 0) - (S.fuel && S.fuel[id] ? 1 : 0); if (n > 0) o[id] = n; }); return o; }
   function questDone(goal) {
     var q = S.today && S.today.quests.filter(function (q) { return q.goal === goal && !q.done; })[0];
     if (!q) return null;
-    q.done = true; addStars(q.reward.stars); addXp(q.reward.xp); var lv = compXp(R.XP.daily);
+    q.done = true; q.doneAt = S.clock; addStars(q.reward.stars); addXp(q.reward.xp); var lv = compXp(R.XP.daily);
     return { quest: q, levelUp: lv };
   }
 
@@ -256,7 +294,7 @@
     var wk = E.weekIndex(S.day);
     if (S.weekDone[wk]) return null;
     if (kind === 'load' && hasWeekly()) return null;
-    S.weekDone[wk] = kind; compXp(R.XP.weekly);
+    S.weekDone[wk] = kind; S.weekDoneAt = S.weekDoneAt || {}; S.weekDoneAt[wk] = { day: S.day, at: S.clock }; compXp(R.XP.weekly);
     var id = nid('ch'); S.chests.push({ id: id, type: 'gold', source: kind === 'boss' ? 'boss' : 'headline', day: S.day, opened: false });
     S.flags.lastActiveDay = S.day;
     save(); return id;
@@ -338,16 +376,17 @@
       t.paidGames.push(game);
       addStars(rw.stars); addXp(rw.xp); lv = compXp(rw.first ? R.runXp(stars) : rw.compXp);
       S.life.runs++;
-      (result.finds || []).forEach(function (f) { if (f && f.id && E.FIND_BY_ID[f.id]) addFind(f.id); else if (f) addFind(normalizeFind(f)); });
-      if (rw.diffFind) addFind(normalizeFind({ id: 'diff-' + game + '-' + S.day, rarity: rw.diffFind }));
+      (result.finds || []).forEach(function (f) { if (!f) return; var src = f.pu ? 'powerup' : 'game'; if (f.id && E.FIND_BY_ID[f.id]) addFind(f.id, src); else addFind(normalizeFind(f), src); });
+      if (rw.diffFind) addFind(normalizeFind({ id: 'diff-' + game + '-' + S.day, rarity: rw.diffFind }), 'game');
       consumePowerUps(result.powerUpsUsed);
       if (rw.first) {
         // Kid profiles: deterministic rewards only, so the first game pays a fixed Find instead of a random chest.
-        if (isKid()) addFind(E.FINDS.filter(function (f) { return !S.owned[f.id]; }).concat(E.FINDS)[0].id);
+        if (isKid()) addFind(E.FINDS.filter(function (f) { return !S.owned[f.id]; }).concat(E.FINDS)[0].id, 'kid');
         else if (rw.chest) { chestId = nid('ch'); S.chests.push({ id: chestId, type: rw.chest, source: game === 'trail' ? 'run' : 'game', day: S.day, opened: false }); }
         S.tickets += rw.ticket; S.ticketDays.push(S.day);
       }
     }
+    if (P.crewAdd(S, 'game', S.day)) t.crewGame = true; // v5.6 crew: 1 point for finishing any daily game (never check-ins)
     var distinct = Object.keys(t.boards).map(function (k) { return k.split('|')[0]; }).filter(function (g, i, a) { return a.indexOf(g) === i; });
     var q1 = distinct.length >= 2 ? questDone('two') : null, q2 = null;
     S.flags.lastActiveDay = S.day;
@@ -378,9 +417,10 @@
   function addChest(type, source) { var id = nid('ch'); S.chests.push({ id: id, type: type, source: source, day: S.day, opened: false }); save(); return id; }
   function openChest(id) {
     var c = S.chests.filter(function (x) { return x.id === id; })[0]; if (!c || c.opened) return null;
-    var r = E.rollChest(c.type, { pity: S.pity, owned: S.owned, rng: E.rng('chest-' + id + '-' + S.day + '-' + S.life.finds) });
+    // v5.6: seeded by chest and day only, and "prefer new" reads play-sourced copies, so doses can't shift what a chest holds.
+    var r = E.rollChest(c.type, { pity: S.pity, owned: playOwned(), rng: E.rng('chest-' + id + '-' + S.day) });
     S.pity = r.pity;
-    r.finds.forEach(function (f) { addFind(f.id); });
+    r.finds.forEach(function (f) { addFind(f.id, 'chest'); });
     addStars(r.stars);
     var pu = null; if (r.powerUp) pu = addPowerUp(E.nextPowerUp(S.puDropped++), 'A ' + E.CHESTS[c.type].label + ' chest');
     c.opened = true; c.result = { finds: r.finds, stars: r.stars, powerUp: pu && pu.type, pityTriggered: r.pityTriggered }; c.openedDay = S.day;
@@ -400,7 +440,7 @@
   var DESTS = { expedition: ['saltflats', 'canopy', 'tidepools'], grove: ['market', 'meadow', 'orchard'] };
   function questForDest(destId) { for (var t in DESTS) { var i = DESTS[t].indexOf(destId); if (i >= 0) return R.QUESTS[i].id; } return /^q\d$/.test(destId || '') ? destId : null; }
   function destForQuest(qid) { return DESTS.expedition[R.questIndex(qid)]; }
-  function compState() { return { level: R.levelInfo(S.compLevel.xp).level, nodes: S.rpg.nodes, fork: S.rpg.fork }; }
+  function compState() { return { level: R.levelInfo(S.compLevel.xp).level, nodes: S.rpg.nodes, fork: S.rpg.fork, plus: (S.inventory && S.inventory.plus) || {} }; }
   function stage() { return E.growthStage(S.camp.total); }
   function regionTier() { return R.tierFor(S.camp.total); }
   function bag() { return S.inventory.bag; }
@@ -423,19 +463,21 @@
     S.inventory.equipped = { tool: lo.tool, garb: lo.garb, trinket: lo.trinket };
     var pk = null;
     if (packed && R.PACKABLE.indexOf(packed) >= 0 && S.pu[packed] > 0) { S.pu[packed]--; pk = { type: packed, source: S.puSources[packed] || null }; }
-    S.trip = { status: 'out', dest: destForQuest(qid), quest: qid, leftDay: S.day, loadout: lo, comp: JSON.parse(JSON.stringify(compState())), tier: regionTier(), packed: pk };
+    S.trip = { status: 'out', dest: destForQuest(qid), quest: qid, leftDay: S.day, loadout: lo, comp: JSON.parse(JSON.stringify(compState())), tier: regionTier(), packed: pk, lookFor: (S.quest && S.quest.lookFor) || 'any' };
     S.today.tripSent = true; save(); return { quest: qid };
   }
   function sendTrip(destId) { return sendQuest(questForDest(destId) || 'q1'); }
   // Finds are picked on their own stream, so a dose (more Finds) can never shift what gear or story a quest brings.
-  function pickFinds(n, bumps, salt, silverLean) {
-    var out = [], owned = Object.assign({}, S.owned), r = E.rng('finds-' + salt), w = silverLean ? E.CHESTS.silver.weights : E.CHESTS.basic.weights;
+  function pickFinds(n, bumps, salt, silverLean, set, setShare) {
+    var out = [], owned = playOwned(), r = E.rng('finds-' + salt), w = silverLean ? E.CHESTS.silver.weights : E.CHESTS.basic.weights;
     for (var i = 0; i < n; i++) {
       var rar;
       if (isKid()) { var f0 = E.FINDS.filter(function (f) { return f.rarity === 'common' && !owned[f.id]; })[0] || E.FINDS[i % 5]; out.push({ id: f0.id, rarity: f0.rarity, dup: !!owned[f0.id] }); owned[f0.id] = 1; continue; }
       rar = E.RARITIES[Math.min(3, E.rarityRank(rollR(r, w)) + (i < bumps ? 1 : 0))];
       if (!E.FINDS.some(function (f) { return f.rarity === rar; })) rar = 'common';
-      var pool = E.FINDS.filter(function (f) { return f.rarity === rar; }), fresh = pool.filter(function (f) { return !owned[f.id]; });
+      var pool = E.FINDS.filter(function (f) { return f.rarity === rar; });
+      if (set && r() < (setShare == null ? 1 : setShare)) { var inSet = pool.filter(function (f) { return f.set === set; }); if (inSet.length) pool = inSet; } // "Look for": from the quest's set
+      var fresh = pool.filter(function (f) { return !owned[f.id]; });
       var use = fresh.length && r() < 0.7 ? fresh : pool, f = use[Math.floor(r() * use.length)] || pool[0];
       out.push({ id: f.id, rarity: f.rarity, dup: !!owned[f.id] }); owned[f.id] = 1;
     }
@@ -454,15 +496,21 @@
     var force = null;
     if (!S.rpg.returns && !isKid()) { var cand = R.BASIC.filter(function (x) { return bag().indexOf(x) < 0; }); for (var i = 0; i < cand.length && !force; i++) if (R.gearImpact(cand[i], compState(), bag().concat([cand[i]]), regionTier())) force = cand[i]; if (!force) force = cand[0] || null; }
     var seed = qid + '-' + (tr.leftDay || S.day) + '-' + S.rpg.returns;
-    var base = R.rollHaul(results, { seed: seed, bag: bag(), kid: isKid(), forceGear: force });
+    if (S.flags.dupGearNext && bag().length) { force = bag()[0]; S.flags.dupGearNext = false; } // demo: a duplicate on this return
+    var lookFor = tr.lookFor || 'any', qset = R.quest(qid).set;
+    var base = R.rollHaul(results, { seed: seed, bag: bag(), kid: isKid(), forceGear: force, lookFor: lookFor, set: qset });
     var c = Math.max(0, Math.min(100, charge || 0)) / 100, pr = E.rng('prov-' + S.day + '-' + S.life.finds);
     var prov = { finds: isKid() ? Math.round(2 * c) : Math.round(2 * c), stars: Math.round(80 * c), silver: !isKid() && pr() < 0.10 + 0.30 * c };
     var powerUp = !isKid() && pr() < 0.10 + 0.20 * c;
     var pk = tr.packed ? R.packedFinds(tr.packed.type, results, base) : { finds: 0, bump: 0 };
-    var qFinds = pickFinds(base.finds, base.findBumps + pk.bump, 'q-' + seed, false);
-    var extra = pickFinds(prov.finds + pk.finds, 0, 'p-' + S.day + '-' + S.life.finds, prov.silver);
+    // The base specimen comes from anywhere; roll specimens lean to the quest's set ("Look for"). Sources are kept per find.
+    var qFinds = pickFinds(1, 0, 'q0-' + seed, false).concat(pickFinds(base.finds - 1, base.findBumps, 'q-' + seed, false, qset, base.setShare)).map(function (f) { f.src = isKid() ? 'kid' : 'quest'; return f; });
+    var extra = pickFinds(prov.finds + pk.finds, 0, 'p-' + S.day + '-' + S.life.finds, prov.silver).map(function (f, i) { f.src = i < prov.finds ? 'provision' : 'powerup'; return f; });
+    // A packed Lucky bumps a quest find's rarity: that bumped find counts as a power-up find (fuel-copy rule).
+    if (pk.bump && qFinds.length) { var lk = qFinds[qFinds.length - 1]; lk.src = 'powerup'; }
     var finds = qFinds.concat(extra).sort(function (a, b) { return E.rarityRank(b.rarity) - E.rarityRank(a.rarity); });
-    var haul = { finds: finds, stars: base.stars + prov.stars, xp: 20, compXp: R.XP.quest, powerUp: powerUp, silver: prov.silver, boost: false,
+    finds.forEach(function (f) { f.fuelStars = (f.src === 'powerup' || f.src === 'provision') && (S.owned[f.id] || 0) > 0; });
+    var haul = { lookFor: lookFor, set: qset, finds: finds, stars: base.stars + prov.stars, xp: 20, compXp: R.XP.quest, powerUp: powerUp, silver: prov.silver, boost: false,
       gear: base.gear, base: { finds: base.finds, stars: base.stars }, provisions: { finds: prov.finds, stars: prov.stars }, packed: tr.packed ? { type: tr.packed.type, source: tr.packed.source, finds: pk.finds, bump: pk.bump } : null };
     S.trip = { status: 'back', dest: tr.dest || destForQuest(qid), quest: qid, loadout: lo, comp: cs, tier: tier, results: results, haul: haul, fromDay: S.day, backDay: S.day + 1, leftDay: tr.leftDay };
   }
@@ -472,17 +520,18 @@
     var k = E.PU_ORDER.filter(function (t) { return S.pu[t] > 0; })[0]; if (!k) return null;
     S.pu[k]--;
     var r = E.rng('boost-' + S.day), f = E.FINDS[Math.floor(r() * 27)];
-    S.trip.haul.finds.push({ id: f.id, rarity: f.rarity, dup: !!S.owned[f.id] }); S.trip.haul.boost = k;
+    S.trip.haul.finds.push({ id: f.id, rarity: f.rarity, dup: !!S.owned[f.id], src: 'powerup', fuelStars: !!S.owned[f.id] }); S.trip.haul.boost = k;
     save(); return k;
   }
   function openTrip() {
     if (S.trip.status !== 'back') return null;
     var tr = S.trip, h = tr.haul;
-    h.finds.forEach(function (f) { addFind(f.id); });
+    h.finds.forEach(function (f) { addFind(f.id, f.src || 'quest'); });
     addStars(h.stars); addXp(h.xp);
     var lv = compXp(h.compXp || R.XP.quest);
     var pu = h.powerUp ? addPowerUp(E.nextPowerUp(S.puDropped++), 'Your companion’s trip') : null;
-    var newGear = []; (h.gear || []).forEach(function (g) { if (addGear(g.id)) newGear.push(g.id); });
+    // v5.6: a duplicate piece of gear merges by itself (+1), or becomes 100 Stars at +5.
+    var newGear = [], gearArr = []; (h.gear || []).forEach(function (g) { var a = P.gearArrive(S, g.id); a.id = g.id; gearArr.push(a); if (a.kind === 'new') newGear.push(g.id); if (a.kind === 'stars') addStars(a.stars); });
     S.rpg.returns = (S.rpg.returns || 0) + 1;
     // The day's quest becomes a Journal page (not a Book page). Pages count days played, never dates.
     var entry = null, weekly = null;
@@ -493,7 +542,7 @@
     }
     var dest = tr.dest;
     S.trip = { status: 'home', lastHaul: h, lastDest: dest, lastQuest: tr.quest };
-    save(); return { haul: h, powerUp: pu, levelUp: lv, gear: newGear, entry: entry, weekly: weekly, results: tr.results, quest: tr.quest };
+    save(); return { haul: h, powerUp: pu, levelUp: lv, gear: newGear, gearArrive: gearArr, entry: entry, weekly: weekly, results: tr.results, quest: tr.quest };
   }
   // Days played including today if today is already lit (or about to be). Used for page numbers only.
   function playedDayNo() { return Math.max(1, S.camp.total + (E.campLitOn(S.camp, S.day) ? 0 : 1)); }
@@ -535,11 +584,13 @@
     else if (S.trip.status === 'home' && active) { S.trip = { status: 'out', dest: S.trip.lastDest || null, leftDay: t.dayNum, auto: true }; computeTripReturn(t.charge); }
     S.flags.assist = null;
     // Campfire: the day that just ended is judged by play actions only (Run / Feed). Doses are never read here.
+    if (S.crew && !isKid()) P.crewEndDay(S, t.dayNum); // the crew meter moves once a day, in a batch
     var ce = E.campEndDay(S.camp, t.dayNum, { kid: isKid() });
     S.camp = ce.camp;
     S.flags.campNote = ce.fx.shieldUsed ? { type: 'shield', day: t.dayNum + 1 } : ce.fx.reset ? { type: 'ready', day: t.dayNum + 1, prev: ce.fx.prev } : null;
     var next = t.dayNum + 1;
     startDay(next, opts.clock);
+    refillTick();
     if (E.welcomeBackEligible(S.flags.lastActiveDay, next, S.flags.wbLast) && !opts.silent) S.flags.pendingWelcome = true;
     // v5.4 quiet page: after a quiet stretch the Book gains one warm page (at most one per 14 days). It never mentions the gap,
     // and its number is the next day played, so the Book reads straight through.
@@ -569,7 +620,7 @@
     var r = E.campLight(S.camp, S.day, { kid: isKid() });
     S.camp = r.camp;
     var fx = r.fx; fx.source = source; fx.chests = [];
-    if (fx.lit) S.flags.campNote = null;
+    if (fx.lit) { S.flags.campNote = null; if (!isKid()) P.passStep(S, S.day); } // Season Pass: one step per day played, never doses
     if (fx.stageUp && spineDue()) { S.book.spinePending = true; fx.spine = true; }
     fx.milestones.forEach(function (m) { fx.chests.push(addChest(m.chest, 'campfire-' + m.n)); if (m.cosmetic) addCosmetic(m.cosmetic); });
     var rl = tryRelight(); if (rl && rl.relit) fx.relight = rl;
@@ -591,6 +642,7 @@
     if (S.today.fed) return { already: true };
     S.today.fed = true;
     S.comp.bond += FEED.bond;
+    P.crewAdd(S, 'feed', S.day); // crew: 1 point for feeding (never check-ins)
     addXp(FEED.xp); var lv = compXp(R.XP.feed);
     S.flags.lastActiveDay = S.day;
     var camp = light('feed');
@@ -659,6 +711,7 @@
     opts = opts || {};
     var isNew = !S.meds.some(function (m) { return m.id === item.id; });
     item.schedule = item.schedule || E.schedOf(item);
+    E.migrateItemTimes(item); item.supplyV = 3; // the editor always saves the v5.6 shape (supply is a count the person typed)
     if (isNew) {
       if (item.schedule.start == null || item.schedule.start <= S.day) {
         if (itemStartsToday(item)) { item.schedule.start = S.day; item.startMins = S.clock; }
@@ -674,7 +727,9 @@
       if (prev && prev.startMins != null && E.schedOf(prev).start === S.day && item.schedule.start === S.day) item.startMins = prev.startMins; else delete item.startMins;
     }
     if (item.type === 'habit') { delete item.supply; delete item.highRisk; item.strength = ''; }
+    var prevM = medById(item.id);
     upsertMed(item);
+    if (item.supply != null && (!prevM || prevM.supply !== item.supply || prevM.supplySetOn !== item.supplySetOn)) noteSupplyEdit(item); // an edit never arms a refill payout
     var changed = replanToday();
     var nx = E.nextOccurrences(item, S.day, S.clock, 1)[0] || null;
     save();
@@ -721,15 +776,89 @@
   function setPaused(medId, paused) { var m = medById(medId); if (!m) return; m.paused = paused; m.pausedFrom = paused ? S.day + 1 : null; if (!paused) m.pausedUntil = null; save(); }
   // "Stop tracking": the item ends from tomorrow. It is never deleted, so the calendar keeps its history.
   function stopTracking(medId) { var m = medById(medId); if (!m) return; m.ended = S.day + 1; save(); }
-  // Supply counts down from the day it was set (P1): "About N days left" everywhere comes from here.
-  // v5.5 round 2: supply is days' worth of *scheduled use*, so it only counts down on days the item was due (a monthly shot
-  // doesn't drop every day; as needed doesn't count down on a clock at all).
+  // Supply counts down from the day it was set (P1). v5.6 (A3): supply is a count (pills, mL, puffs...) and each dose uses
+  // the amount's leading number, or one when there isn't one. It only drops on days the item was due (a monthly shot doesn't
+  // drop every day; as needed doesn't count down on a clock at all).
   function supplyLeft(item) {
     if (!item || item.supply == null) return null;
     if (E.isAsNeeded(item)) return item.supply;
     var from = item.supplySetOn != null ? item.supplySetOn : S.day, used = 0;
-    for (var d = from; d < S.day; d++) if (E.occursOn(item, d)) used++;
-    return Math.max(0, item.supply - used);
+    for (var d = from; d < S.day; d++) if (E.occursOn(item, d)) used += E.unitsOn(item, d);
+    return Math.max(0, Math.round((item.supply - used) * 100) / 100);
+  }
+  // "About N days left": calendar days until the first due day the supply can't cover (today counts while today's dose is ahead).
+  function daysLeft(item) {
+    var left = supplyLeft(item); if (left == null || E.isAsNeeded(item)) return null;
+    for (var d = S.day; d < S.day + 400; d++) {
+      if (!E.occursOn(item, d)) continue;
+      var u = E.unitsOn(item, d); if (!u) continue;
+      if (left + 1e-9 < u) return d - S.day;
+      left -= u;
+    }
+    return 400;
+  }
+  function supplyText(item) { var n = daysLeft(item); return n == null ? 'Not tracked' : n >= 400 ? 'Plenty on hand' : 'About ' + n + ' day' + (n === 1 ? '' : 's') + ' left'; }
+
+  /* ---------- v5.6 refill reminders (A7) ---------- */
+  function refillDue(item) { return E.refillDue(item, S.day, daysLeft(item)); }
+  /* Refill cycles (QA P1-1): a payout needs a fresh cycle. A cycle is armed only when the supply drops under the lead
+   * through doses (seen at the 3:00 rollover), never through an edit or a refill. "Refill's in" pays once and clears the card. */
+  var REFILL_PAY_GAP = 14; // at most one refill reward per item per 14 days (slow-farm guard)
+  // Supply-only "at or under the lead", ignoring a pause, so pausing and resuming can't fake a crossing.
+  function rawDue(m) { if (m.supply == null || E.isAsNeeded(m) || E.isEnded(m, S.day)) return false; var c = m.paused ? Object.assign({}, m, { paused: false }) : m, n = daysLeft(c); return n != null && n <= E.refillLead(m); }
+  function refillTick() {
+    S.meds.forEach(function (m) {
+      if (m.supply == null) return;
+      var r = m.refill = m.refill || {}, now = rawDue(m);
+      if (now && !r.lastRawDue) { r.armed = true; r.cleared = false; }   // crossed under the lead through doses: a new cycle
+      if (!now) r.cleared = false;
+      r.lastRawDue = now;
+    });
+  }
+  // Will "Refill's in" pay right now? (The card only promises "+40 ★" when this is true.)
+  function refillWillPay(m) { var r = (m && m.refill) || {}; return !!r.armed && (r.paidDay == null || S.day - r.paidDay >= REFILL_PAY_GAP) && refillDue(m); }
+  function noteSupplyEdit(m) { if (!m || m.supply == null) return; m.refill = Object.assign({}, m.refill || {}); m.refill.lastRawDue = rawDue(m); m.refill.cleared = false; } // shows the card if it's low, but pays nothing (no armed cycle)
+  function refillsDue() { return S.today ? S.meds.filter(function (m) { return refillDue(m); }) : []; }
+  // "Refill's in": add what they got. Pays the care-goal reward once per refill (only while the reminder is showing).
+  function refillIn(medId, amount) {
+    var m = medById(medId); amount = Math.round((+amount || 0) * 100) / 100; if (!m || !(amount > 0)) return null;
+    var willPay = refillWillPay(m), left = supplyLeft(m) || 0;
+    m.supply = Math.round((left + amount) * 100) / 100; m.supplySetOn = S.day; m.supplyV = 3;
+    m.refill = Object.assign({}, m.refill || {}, { lastAmount: amount, askAgain: null, note: null, off: false, lastOn: S.day, armed: false });
+    m.refill.lastRawDue = rawDue(m);
+    m.refill.cleared = !m.refill.lastRawDue; // a partial refill still at or under the lead keeps the daily reminder (no second payout)
+    var paid = null;
+    if (willPay) { addStars(CARE_REWARD.stars); addXp(CARE_REWARD.xp); paid = CARE_REWARD; m.refill.paidDay = S.day; S.flags.lastActiveDay = S.day; }
+    save(); return { paid: paid, supply: m.supply, daysLeft: daysLeft(m) };
+  }
+  // "Not needed": supply tracking stops for this item until they turn it back on (in the editor).
+  function refillNotNeeded(medId) {
+    var m = medById(medId); if (!m) return null;
+    m.refill = Object.assign({}, m.refill || {}, { off: true, askAgain: null, offOn: S.day, lastSupply: m.supply });
+    m.supply = null; m.supplySetOn = null;
+    save(); return {};
+  }
+  // "Something else": what they typed goes on today's record; the reminder asks again in 3 days.
+  function refillOther(medId, text) {
+    var m = medById(medId); if (!m) return null;
+    var t = String(text || '').trim().slice(0, 280);
+    m.refill = Object.assign({}, m.refill || {}, { askAgain: S.day + E.REFILL.reask, note: t || null });
+    if (t) addNote(S.day, medId, t, 'refill');
+    save(); return { askAgain: m.refill.askAgain };
+  }
+  function lastRefillAmount(m) { return (m && m.refill && m.refill.lastAmount) || (m && m.refill && m.refill.lastSupply) || (m && m.supplyStart) || 30; }
+
+  /* ---------- v5.6 free-text notes on the day's record (A1 "What got in the way?", A7 "Something else") ---------- */
+  function addNote(day, itemId, text, kind) {
+    var t = String(text || '').trim().slice(0, 280); if (!t) return null;
+    var note = { itemId: itemId || null, text: t, kind: kind || 'easier', at: day === S.day ? S.clock : null };
+    if (S.today && day === S.day) { S.today.notes = (S.today.notes || []).concat([note]); save(); return note; }
+    var h = S.history.filter(function (x) { return x.dayNum === day; })[0]; if (!h) return null;
+    h.notes = (h.notes || []).concat([note]); save(); return note;
+  }
+  function notesFor(day) {
+    var list = S.today && day === S.day ? S.today.notes : ((S.history.filter(function (x) { return x.dayNum === day; })[0] || {}).notes);
+    return (list || []).map(function (n) { return typeof n === 'string' ? { itemId: null, text: n, kind: 'easier' } : n; });
   }
   function activeItems() { return S.meds.filter(function (m) { return !E.isEnded(m, S.day); }); }
 
@@ -802,7 +931,7 @@
   function loadPreset(name) {
     var keepTheme = S.theme;
     S = blank(); demoize(); S.onboarded = true; S.preset = name;
-    S.meds = baseMeds(name);
+    S.meds = baseMeds(name).map(normalizeItem);
     var target = 2, policy = {}, theme = 'expedition', comp = { species: 'fox', name: 'Ember' };
     if (name === 'logan') { target = 2; comp = { species: 'fox', name: 'Ember' }; S.settings.twoStep = true; }
     if (name === 'maya') { target = 5; comp = { species: 'drake', name: 'Nova' }; policy.answer = function (st, r) { return S.day === 3 ? 'didnt' : 'took'; }; }
@@ -837,21 +966,27 @@
     S.theme = keep.theme; S.comp = { species: keep.comp.species, name: keep.comp.name, bond: 2 };
     S.settings = Object.assign(S.settings, keep.settings, { twoStep: !!o.twoStep, twoStepAsked: true });
     var n = o.now ? E.gameNow(o.now) : { day: 1, clock: 480 };
-    var item = o.item ? JSON.parse(JSON.stringify(o.item)) : { name: o.medName || 'My morning med', type: o.mode === 'habits' ? 'vitamin' : 'med', strength: '', schedule: { pattern: { kind: 'daily' }, times: { mode: 'list', list: [o.time || '08:00'] }, start: null, end: null, doseSteps: null } };
-    item.id = 'm1'; item.createdDay = n.day; item.twoStep = item.type === 'habit' ? false : !!o.twoStep;
-    if (item.type === 'med' && item.supply === undefined) item.supply = 30;
-    if (item.supply != null) item.supplySetOn = n.day;
-    item.schedule = item.schedule || E.schedOf(item);
-    // The onboarding item starts today; in Live mode only its times still ahead count today (S5).
-    item.schedule.start = n.day; delete item.startMins; // v5.5 round 2: the first item always starts today, past slots included
-    S.meds = [item];
+    // v5.6 (A2): onboarding can add more than one thing ("Add another"). o.items wins; o.item is the v5.5 single item.
+    var src = o.items && o.items.length ? o.items : [o.item ? o.item : { name: o.medName || 'My morning med', type: o.mode === 'habits' ? 'vitamin' : 'med', strength: '', schedule: { pattern: { kind: 'daily' }, times: { mode: 'list', list: [o.time || '08:00'] }, start: null, end: null, doseSteps: null } }];
+    S.meds = src.map(function (x, i) {
+      var item = JSON.parse(JSON.stringify(x));
+      item.id = 'm' + (i + 1); item.createdDay = n.day; item.twoStep = item.type === 'habit' ? false : !!o.twoStep;
+      if (item.supply === undefined || item.type === 'habit') item.supply = null; // QA P1-4: no invented supply; off until typed
+      if (item.supply != null) { item.supplySetOn = n.day; if (item.supplyStart == null) item.supplyStart = item.supply; }
+      item.schedule = item.schedule || E.schedOf(item);
+      // Every onboarding item starts today, past slots included (v5.5 round 2), so a late setup can log what's already taken.
+      item.schedule.start = n.day; delete item.startMins;
+      item.supplyV = item.supplyV || (o.item || o.items ? 2 : item.supplyV);
+      normalizeItem(item); item.supplyV = 3; return item;
+    });
+    S.seq = Math.max(S.seq, S.meds.length + 1);
     S.day = n.day; S.clock = n.clock;
     startDay(n.day, n.clock);
     if (o.now) S.liveMax = n.day * 2000 + n.clock;
     // tutorial rewards (practice: nothing recorded in the health record)
     addXp(80); addStars(80); compXp(R.XP.welcome);
     S.inventory.bag = ['compass']; S.inventory.equipped = { tool: 'compass', garb: null, trinket: null };
-    if (o.chestResult) { o.chestResult.finds.forEach(function (f) { addFind(f.id); }); addStars(o.chestResult.stars); S.chests.push({ id: nid('ch'), type: 'bronze', source: 'first', day: n.day, opened: true, openedDay: n.day, result: { finds: o.chestResult.finds, stars: o.chestResult.stars } }); }
+    if (o.chestResult) { o.chestResult.finds.forEach(function (f) { addFind(f.id, 'chest'); }); addStars(o.chestResult.stars); S.chests.push({ id: nid('ch'), type: 'bronze', source: 'first', day: n.day, opened: true, openedDay: n.day, result: { finds: o.chestResult.finds, stars: o.chestResult.stars } }); }
     addPowerUp('magnet', 'Your practice catch');
     S.puDropped = 1;
     S.trip = { status: 'out', dest: o.dest, leftDay: n.day };
@@ -865,15 +1000,20 @@
   var SAMPLE_WEEK = [['q1', 0], ['q2', 1], ['q3', 0], ['q1', 2], ['q2', 0], ['q3', 1], ['q1', 1]];
   function jumpTo(n) {
     var keepSpine = (S.book.pages.filter(function (p) { return p.kind === 'spine' && p.ch === 1; })[0] || {}).choice;
-    var keep = { theme: S.theme, comp: S.comp, settings: S.settings, meds: S.meds.length ? S.meds : baseMeds('logan'), preset: S.preset, fork: S.rpg.fork, kid: isKid() };
+    var keep = { theme: S.theme, comp: S.comp, settings: S.settings, meds: S.meds.length ? S.meds : baseMeds('logan').map(normalizeItem), preset: S.preset, fork: S.rpg.fork, kid: isKid(), crew: S.crew, shop: S.shop, looks: S.looks, quest: S.quest };
     S = blank(); demoize(); S.onboarded = true; S.preset = keep.preset || 'logan';
-    S.theme = keep.theme; S.comp = keep.comp; S.settings = keep.settings; S.meds = keep.meds; S.profile.kid = keep.kid;
+    S.theme = keep.theme; S.comp = keep.comp; S.settings = keep.settings; S.meds = keep.meds; S.profile.kid = keep.kid; S.crew = keep.crew; S.shop = keep.shop; S.looks = keep.looks; S.quest = keep.quest;
+    if (S.crew) S.crew.joinedDay = Math.min(S.crew.joinedDay, n - 7);
     var played = n - 1; // every day before today was played; today lights on the first Feed or Run
     S.compLevel.xp = 130 * played + R.XP.welcome; S.compLevel.level = R.levelInfo(S.compLevel.xp).level;
     var c = E.campBlank(); c.total = played; c.count = played; c.best = played; c.shields = 2; c.lastLit = n - 1;
     E.milestonesUpTo(played).forEach(function (m) { c.paid[m] = true; }); S.camp = c;
     S.stars = 45 * played; S.life.starsEarned = S.stars; S.life.runs = Math.round(played * 0.7); S.tickets = 3;
-    E.FINDS.slice(0, Math.min(30, Math.round(played / 4) + 6)).forEach(function (f) { S.owned[f.id] = 1; });
+    E.FINDS.slice(0, Math.min(30, Math.round(played / 4) + 6)).forEach(function (f) { S.owned[f.id] = 1; S.found[f.id] = true; });
+    // v5.6 day presets: spare piles and gear levels sized from the spec (§2.6, est.), so Combine and the Workbench have stock.
+    if (n >= 30) { var pile = Math.min(9, Math.round(n / 20) + 2); E.FINDS.slice(0, Math.min(30, Math.round(played / 4) + 6)).forEach(function (f, i) { S.owned[f.id] += f.rarity === 'common' ? pile : f.rarity === 'uncommon' ? Math.max(1, pile - 2) : i % 3 === 0 ? 2 : 1; }); }
+    if (n >= 100) { S.inventory.plus = { compass: 3, cloak: 2, satchel: 2 }; S.shiny['s1-1'] = true; }
+    if (n >= 365) { S.inventory.plus = { compass: 5, cloak: 4, satchel: 3, boots: 3, scarf: 2 }; S.shiny['s1-2'] = true; S.shiny['s2-1'] = true; }
     // Early jumps hold 8 of the 9 basic pieces (the Trail Boots haven't dropped yet), so the day-45 fork visibly moves a beat.
     S.inventory.bag = n < 100 ? R.BASIC.filter(function (x) { return x !== 'boots'; }) : R.BASIC.slice();
     if (n >= 150) S.inventory.bag.push('spyglass', 'mantle', 'ribbon');
@@ -907,6 +1047,43 @@
   /* Jumps that land on a Campfire milestone: light today so the milestone chest is really earned through the engine. */
   function jumpLit(n) { jumpTo(n); S.today.fed = true; var fx = light('feed'); save(); return fx; }
 
+  /* ---------- v5.6 Part B actions (save after each; all dose-blind) ---------- */
+  function wrap(fn) { return function () { var r = fn.apply(null, arguments); save(); return r; }; }
+  var combine = wrap(function (o) { return P.combine(S, o); });
+  var fillGaps = wrap(function () { return P.fillGaps(S); });
+  var makeShiny = wrap(function (o) { return P.makeShiny(S, o); });
+  var upgradeGear = wrap(function (id, take) { return P.upgrade(S, id, take); });
+  var setLookFor = wrap(function (mode) { if (P.LOOK[mode]) S.quest = { lookFor: mode }; return S.quest.lookFor; });
+  function crewOn() { return !isKid() && !(S.profile && S.profile.teen); }
+  function shopOn() { return P.shopAllowed(S); }
+  var joinCrew = wrap(function () { if (!crewOn() || S.crew) return S.crew; S.crew = P.sampleCrew(S.day); if (S.today && S.today.fed) P.crewAdd(S, 'feed', S.day); if (S.today && S.today.gameDone) P.crewAdd(S, 'game', S.day); return S.crew; });
+  var crewClaim = wrap(function (tier, id) { return P.crewClaim(S, tier, id, S.day); });
+  var giftSpare = wrap(function (id, to) { return P.giftSpare(S, id, to, S.day, !crewOn()); });
+  var giftsIn = wrap(function () { return P.giftsIn(S, S.day); });
+  var cheer = wrap(function (mid, which) { return P.cheer(S, mid, which); });
+  var shareMoment = wrap(function (kind, text) { return P.postMoment(S, kind, text, S.day, (S.comp.name || 'You') + ' (you)', S.comp.species); });
+  var purchase = wrap(function (id) { var r = P.purchase(S, id), it = P.item(id); if (r.ok && it && /^look/.test(it.kind)) S.looks.equipped.companion = id; return r; }); // a bought look goes on right away
+  var passClaim = wrap(function (row, n, pick) { return P.passClaim(S, row, n, pick); });
+  var equipLook = wrap(function (id) { S.looks = S.looks || { equipped: {}, owned: [] }; if (id && S.looks.owned.indexOf(id) < 0) return false; S.looks.equipped.companion = id || null; return true; });
+  var resetShop = wrap(function () { S.shop = P.blankShop(); S.looks = { equipped: {}, owned: (S.looks && S.looks.owned || []).filter(function (x) { return !/^(look|camp|board|cover|fx|pass)/.test(x); }) }; return true; });
+  /* Fairness check (demo): 7 days at Spark 0 and 7 at Spark 100 with the same plays. Spares, gear levels, the crew meter and
+   * the pass step must match; only Field Guide "found" entries and Stars may differ. Runs on copies; the save is untouched. */
+  function fairnessCheck() {
+    var keepS = S, out = [];
+    [0, 100].forEach(function (spark) {
+      S = JSON.parse(JSON.stringify(keepS)); S.clockMode = 'demo';
+      var noSave = save; save = function () { };
+      if (!S.crew && crewOn()) S.crew = P.sampleCrew(S.day);
+      for (var d = 0; d < 7; d++) { autoplayDay({ answer: function () { return spark ? 'took' : 'didnt'; } }); rollover({ silent: true }); }
+      save = noSave;
+      var sp = 0; Object.keys(S.owned).forEach(function (id) { sp += P.spares(S, id); });
+      out.push({ spark: spark, spares: sp, plus: JSON.stringify(S.inventory.plus || {}), crew: S.crew ? S.crew.week.shared + '|' + JSON.stringify(S.crew.week.mineToday) : '-', step: S.shop.pass.step, found: Object.keys(S.found).length, stars: S.stars });
+    });
+    S = keepS;
+    var a = out[0], b = out[1];
+    return { runs: out, same: a.spares === b.spares && a.plus === b.plus && a.crew === b.crew && a.step === b.step };
+  }
+
   root.Store = {
     get S() { return S; }, set S(v) { S = v; },
     blank: blank, save: save, load: load, reset: reset,
@@ -916,13 +1093,17 @@
     finishRun: finishRun, addChest: addChest, openChest: openChest, sendTrip: sendTrip, openTrip: openTrip,
     buyDecor: buyDecor, placeDecor: placeDecor, rollover: rollover, claimWelcome: claimWelcome,
     answerBarrier: answerBarrier, careQuest: careQuest, completeCareQuest: completeCareQuest, CARE_REWARD: CARE_REWARD,
-    upsertMed: upsertMed, saveItem: saveItem, replanToday: replanToday, itemStartsToday: itemStartsToday, stopTracking: stopTracking, supplyLeft: supplyLeft, activeItems: activeItems, setPaused: setPaused,
+    upsertMed: upsertMed, saveItem: saveItem, replanToday: replanToday, itemStartsToday: itemStartsToday, stopTracking: stopTracking, supplyLeft: supplyLeft, daysLeft: daysLeft, supplyText: supplyText, normalizeItem: normalizeItem,
+    refillDue: refillDue, refillsDue: refillsDue, rawDue: rawDue, refillTick: refillTick, refillWillPay: refillWillPay, REFILL_PAY_GAP: REFILL_PAY_GAP, refillIn: refillIn, refillNotNeeded: refillNotNeeded, refillOther: refillOther, lastRefillAmount: lastRefillAmount, addNote: addNote, notesFor: notesFor, activeItems: activeItems, setPaused: setPaused,
     finishGame: finishGame, gameKey: gameKey, isLive: isLive, pinned: pinned, liveNow: liveNow, liveSync: liveSync, enterDemo: enterDemo, freshDemo: freshDemo, editEntry: editEntry, backToLive: backToLive, startOver: startOver, hasLiveSave: hasLiveSave, KEYS: KEYS, DEPART: DEPART, RETURN: RETURN, tripOvernight: tripOvernight, autoDepart: autoDepart, recommendedQuest: recommendedQuest, bossDayThisWeek: bossDayThisWeek, nextBossDay: nextBossDay, demoize: demoize, HISTORY_DAYS: HISTORY_DAYS, fakeRunResult: fakeRunResult, autoplayDay: autoplayDay,
     loadPreset: loadPreset, finishOnboarding: finishOnboarding,
     light: light, feed: feed, tryRelight: tryRelight, startRest: startRest, endRest: endRest, growth: growth, isKid: isKid, campOn: campOn, FEED: FEED, addPowerUp: addPowerUp, completeHeadline: completeHeadline, headlineDone: headlineDone, hasWeekly: hasWeekly, boostTrip: boostTrip, addCharge: addCharge, addStars: addStars, addXp: addXp, questDone: questDone, addFind: addFind,
     // v5.4 companion RPG
     compXp: compXp, compState: compState, stage: stage, regionTier: regionTier, bag: bag, addGear: addGear, equip: equip, readyLoadout: readyLoadout,
     spFree: spFree, learnNode: learnNode, sendQuest: sendQuest, questForDest: questForDest, pickChestGear: pickChestGear, chooseSpine: chooseSpine, spineDue: spineDue,
-    playedDayNo: playedDayNo, jumpTo: jumpTo, jumpLit: jumpLit, answerXp: answerXp
+    playedDayNo: playedDayNo, jumpTo: jumpTo, jumpLit: jumpLit, answerXp: answerXp,
+    // v5.6 Part B
+    playOwned: playOwned, combine: combine, fillGaps: fillGaps, makeShiny: makeShiny, upgradeGear: upgradeGear, setLookFor: setLookFor, crewOn: crewOn, shopOn: shopOn, joinCrew: joinCrew, crewClaim: crewClaim,
+    giftSpare: giftSpare, giftsIn: giftsIn, cheer: cheer, shareMoment: shareMoment, purchase: purchase, passClaim: passClaim, equipLook: equipLook, resetShop: resetShop, fairnessCheck: fairnessCheck
   };
 })(typeof window !== 'undefined' ? window : globalThis);

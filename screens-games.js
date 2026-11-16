@@ -9,7 +9,7 @@
   function th() { return Th.T(S()); }
 
   var NAMES = { trail: { expedition: 'The Trail', grove: 'Garden Path' }, word: { expedition: 'Rune Stones', grove: 'Petal Words' }, memory: { expedition: 'Field Notes', grove: 'Firefly Pairs' } };
-  var BLURB = { trail: 'Find the shortest path to all 3 stars. Grab finds on the way.', word: 'Find the hidden word from the letter tray. The clue helps.', memory: 'Turn cards to find the pairs. Fewer slips is better.' };
+  var BLURB = { trail: 'Find the shortest path to all 3 stars. Grab finds on the way.', word: 'Find the hidden word from the letter tray. The clue helps.', memory: 'Turn cards to find the pairs. Fewer repeat misses is better.' };
   var ICON = { trail: '🧭', word: '🪨', memory: '📓' };
   var ICON_G = { trail: '🌷', word: '🌸', memory: '✨' };
   var DIFFS = ['easy', 'normal', 'hard'], DLABEL = { easy: 'Easy', normal: 'Normal', hard: 'Hard' };
@@ -117,6 +117,7 @@
     function onFinish(result) {
       if (S().today && S().today.resume) delete S().today.resume[g + '|' + d];
       curKey = null;
+      S().rulesSeen = S().rulesSeen || {}; S().rulesSeen[g] = true; // A11: next time the rules start collapsed
       finished = Object.assign({}, result || {});
       finished.game = g;
       finished.difficulty = practice ? 'practice' : d; // the board the player picked (hand-made new-player boards report their own tier)
@@ -127,7 +128,7 @@
     root.App._gameDone = done;
     var cfg = root.App._gameCfg = { seed: seedFor(g, d, practice), difficulty: g === 'trail' ? RUN_DIFF[d] : d, powerUps: practice ? { magnet: 0, lens: 0, double: 0, lucky: 0 } : Object.assign({}, s.pu), theme: s.theme, practice: !!practice,
       mode: practice ? undefined : mode, timer: mode === 'ranked' ? 'quiet' : undefined, reducedMotion: U.calm(), fuelLabel: practice || !fuelK ? '' : (s.puSources[fuelK] || 'Your check-ins') + ' built this ' + tm.powerUps[fuelK].name + '.',
-      renderItem: itemArt, onFinish: onFinish, onDone: done,
+      renderItem: itemArt, onFinish: onFinish, onDone: done, rulesSeen: !!(s.rulesSeen && s.rulesSeen[g]),
       boards: boardsOn(), history: (s.boardHistory || []).filter(function (e) { return e && e.game === g; }),
       resume: !practice && s.today && s.today.resume ? s.today.resume[g + '|' + d] || null : null,
       played: { easy: !!played(g, 'easy'), normal: !!played(g, 'normal'), hard: !!played(g, 'hard') },

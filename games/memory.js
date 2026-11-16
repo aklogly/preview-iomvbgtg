@@ -1,5 +1,5 @@
 /* Kindling v5.5 - Field Notes (Expedition) / Firefly Pairs (Grove). Prototype module.
- * Memory pairs scored by slips (memory, not luck), then flips, then time.
+ * Memory pairs scored by repeat misses ("slips" in the code: memory, not luck), then flips, then time.
  * Easy: identical pairs. Normal: identical pairs plus two look-alike pairs. Hard: kin pairs with an on-screen key.
  * Exposes window.MemoryGame. Needs arcade.js loaded first (in Node: require('./arcade.js')).
  * The engine (generate / isSlip / Session) is DOM-free and testable in Node.
@@ -101,8 +101,9 @@
     var c = this.b.cards[idx];
     if (this.practice || !c.glint) return null;
     var r = this.packed.lucky === idx ? U.upRarity(c.glint.rarity) : c.glint.rarity, f = { id: 'find.' + r + '.' + c.glint.item, rarity: r };
+    if (this.packed.lucky === idx) f.pu = true;
     this.finds.push(f);
-    if (this.packed.double === idx) this.finds.push({ id: f.id, rarity: f.rarity });
+    if (this.packed.double === idx) this.finds.push({ id: f.id, rarity: f.rarity, pu: true });
     return { idx: idx, rarity: r, item: c.glint.item, doubled: this.packed.double === idx };
   };
   // flip(idx, ms) -> { ignored } | { first:true } | { match:bool, slip:bool, a, b, gems:[], magnet:0|1, done }
@@ -130,7 +131,7 @@
         var self = this, near = cards.some(function (c, j) {
           return c.glint && !self.matched[j] && (adjacent(self.b, a, j) || adjacent(self.b, b, j));
         });
-        if (near) { this.finds.push({ id: 'find.common.' + ((this.b.puzzleNo + this.magnetPaid) % 4 + 4) % 4, rarity: 'common' }); this.magnetPaid++; ev.magnet = 1; }
+        if (near) { this.finds.push({ id: 'find.common.' + ((this.b.puzzleNo + this.magnetPaid) % 4 + 4) % 4, rarity: 'common', pu: true }); this.magnetPaid++; ev.magnet = 1; }
       }
       if (this.matches === this.b.pairs) { this.done = true; ev.done = true; }
     }
@@ -158,7 +159,7 @@
   function shareText(sess, theme, timeMs) {
     var b = sess.b, name = Arcade.gameName('memory', theme);
     var lines = [name + (sess.practice ? ' · Practice' : ' #' + b.puzzleNo + ' · ' + Arcade.DIFF_LABEL[b.difficulty]),
-      sess.slips + (sess.slips === 1 ? ' slip' : ' slips') + ' · ' + sess.flips + ' flips'];
+      sess.slips + (sess.slips === 1 ? ' repeat miss' : ' repeat misses') + ' · ' + sess.flips + ' flips'];
     if (sess.slips === 0) lines.push('Cleanest memory!');
     if (timeMs != null) lines.push('Time ' + U.fmtTime(timeMs));
     return lines.join('\n');
@@ -290,7 +291,7 @@
           (mode === 'ranked' ? '<button type="button" class="ag-icon-btn ag-pausebtn" aria-label="Pause">' + svg('pause') + '</button>' : '') +
           '<button type="button" class="ag-icon-btn ag-helpbtn" aria-label="How to play">' + svg('help') + '</button></header>' +
         '<div class="ag-hud"><div class="ag-hud-item mg-pairs" aria-label="Pairs found"><b>0</b><span>/ ' + board.pairs + ' pairs</span></div>' +
-          '<div class="ag-hud-item mg-slips"><b>0</b><span>slips</span></div><div class="ag-hud-item mg-flips"><b>0</b><span>flips</span></div>' +
+          '<div class="ag-hud-item mg-slips"><b>0</b><span>repeat misses</span></div><div class="ag-hud-item mg-flips"><b>0</b><span>flips</span></div>' +
           (practice ? '' : '<div class="ag-hud-item ag-bag" aria-label="Finds">' + svg('bag') + '<b>0</b><span>finds</span></div>') + '</div>' +
         keyHtml +
         '<div class="mg-grid" role="group" aria-label="Cards, ' + board.rows + ' rows of ' + board.cols + '" style="--cols:' + board.cols + ';--rows:' + board.rows + '"></div>' +
@@ -340,7 +341,7 @@
         bEl.setAttribute('aria-disabled', sess.matched[i] || phase !== 'play' ? 'true' : 'false');
       }
       el.pairs.textContent = sess.matches;
-      el.slips.textContent = sess.slips; el.slipsLab.textContent = sess.slips === 1 ? 'slip' : 'slips';
+      el.slips.textContent = sess.slips; el.slipsLab.textContent = sess.slips === 1 ? 'repeat miss' : 'repeat misses';
       el.flips.textContent = sess.flips;
       if (el.bag) el.bag.textContent = sess.finds.length;
     }
@@ -374,8 +375,8 @@
         if (ev.done) finish();
         return;
       }
-      setMsg((ev.slip ? 'A slip. You have seen one of these before.' : 'Not a pair. Now you know two more.') + (TURN_BACK == null ? ' Tap any card to keep going.' : ''), ev.slip ? 'soft' : '');
-      announce(fi.name + '. Not a pair with ' + fa.name + '.' + (ev.slip ? ' That counts as a slip.' : ''));
+      setMsg((ev.slip ? 'A repeat miss. You had already seen the match.' : 'Not a pair. Now you know two more.') + (TURN_BACK == null ? ' Tap any card to keep going.' : ''), ev.slip ? 'soft' : '');
+      announce(fi.name + '. Not a pair with ' + fa.name + '.' + (ev.slip ? ' That counts as a repeat miss.' : ''));
       if (TURN_BACK != null) { lock = true; backT = later(function () { backT = null; closeOpen(); }, TURN_BACK); }
     }
     function finish() {
@@ -433,9 +434,9 @@
       }
       return '<div class="ag-intro-badge">' + pic(theme === 'grove' ? 'butterfly' : 'compass') + '</div>' +
         '<div class="ag-kicker">' + esc(puzzleLabel) + ' &middot; ' + dl + '</div><h3 class="ag-sheet-h">' + esc(name) + '</h3>' + U.introControls(opts, mode, difficulty) +
-        '<p class="ag-sheet-p">Flip two cards. Find every pair. ' + esc(kindLine()) + '</p>' +
-        '<p class="ag-sheet-p"><b>Slips</b> count memory, not luck. A slip is a miss when you had already seen the card you needed. Flips into the unknown never count.</p>' +
-        '<div class="ag-facts"><span><b>' + board.pairs + '</b> pairs</span><span><b>' + N + '</b> cards</span><span>3 stars at ' + board.stars[0] + (board.stars[0] === 1 ? ' slip' : ' slips') + '</span></div>' +
+        U.rulesWrap(opts, '<p class="ag-sheet-p">Flip two cards. Find every pair. ' + esc(kindLine()) + '</p>' +
+        '<p class="ag-sheet-p">A <b>repeat miss</b> is when you’d already seen the match. Flips into the unknown never count.</p>') +
+        '<div class="ag-facts"><span><b>' + board.pairs + '</b> pairs</span><span><b>' + N + '</b> cards</span><span>3 stars at ' + board.stars[0] + (board.stars[0] === 1 ? ' repeat miss' : ' repeat misses') + '</span></div>' +
         '<p class="ag-mode-line">' + esc(modeLine()) + '</p>' + packBlock +
         '<div class="ag-sheet-actions"><button type="button" class="ag-btn ag-primary ag-big" data-act="start" data-autofocus>Let’s go</button></div>';
     }
@@ -449,7 +450,7 @@
     function showHelp() {
       clock.pause('free');
       sheet.open('<h3 class="ag-sheet-h">How to play</h3><p class="ag-sheet-p">Tap a card to flip it, then tap another. A pair stays up. Other cards turn back over' + (TURN_BACK == null ? ' when you tap again' : ' after a moment') + '. On a keyboard, use the arrow keys and press Enter or Space to flip.</p>' +
-        '<p class="ag-sheet-p">' + esc(kindLine()) + '</p><p class="ag-sheet-p"><b>Slips</b>: a miss counts as a slip when you had already seen the partner of your first card, or if you picked a card you had seen while new cards were still waiting. Lucky first tries never change slips.</p>' +
+        '<p class="ag-sheet-p">' + esc(kindLine()) + '</p><p class="ag-sheet-p">A <b>repeat miss</b> is when you’d already seen the match: you had seen the partner of your first card, or you picked a card you had seen while new cards were still waiting. Lucky first tries never count.</p>' +
         '<div class="ag-sheet-actions"><button type="button" class="ag-btn ag-primary" data-act="close" data-autofocus>Got it</button></div>', 'is-help', 'How to play');
     }
     function showKey() {
@@ -485,14 +486,14 @@
       var s = result.score;
       var timeLine = s.timeMs != null ? '<p class="ag-time">' + svg('clock') + ' ' + U.fmtTime(s.timeMs) + '</p>' : '';
       sheet.open(U.starsHtml(result.stars) + '<h3 class="ag-sheet-h ag-res-h">' + esc(headline()) + '</h3>' +
-        '<p class="ag-sheet-p ag-res-sub">' + s.slips + (s.slips === 1 ? ' slip' : ' slips') + ' &middot; ' + s.flips + ' flips</p>' + timeLine +
+        '<p class="ag-sheet-p ag-res-sub">' + s.slips + (s.slips === 1 ? ' repeat miss' : ' repeat misses') + ' &middot; ' + s.flips + ' flips</p>' + timeLine +
         U.standingHtml(result, opts) + haulHtml() +
         '<div class="ag-res-sec"><div class="ag-res-lab">Share</div><pre class="ag-share">' + esc(result.shareText) + '</pre></div>' +
         (practice ? '' : '<p class="ag-next">A fresh board arrives <b>tomorrow</b>.</p>') +
         '<div class="ag-sheet-actions">' + (opts.onLeaderboard && mode !== 'practice' && opts.boards !== false ? '<button type="button" class="ag-btn" data-act="board">' + svg('board') + '<span>Leaderboard</span></button>' : '') +
         '<button type="button" class="ag-btn" data-act="copy">' + svg('copy') + '<span>Copy</span></button>' +
         '<button type="button" class="ag-btn ag-primary" data-act="done" data-autofocus>Done</button></div>', 'is-results', 'Results');
-      announce(headline() + ' ' + s.slips + ' slips, ' + s.flips + ' flips.');
+      announce(headline() + ' ' + s.slips + (s.slips === 1 ? ' repeat miss, ' : ' repeat misses, ') + s.flips + ' flips.');
     }
     sheet.el.addEventListener('click', function (ev) {
       if (phase === 'intro' && hasPU && U.packClick(pack, ev)) {

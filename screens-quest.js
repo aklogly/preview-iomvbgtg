@@ -36,7 +36,11 @@
     if (imp.numeric) return q + ' · ' + bn + ': ' + statName(imp.stat) + ' ' + imp.fromV + ' → ' + imp.toV + (imp.to !== 'amazing' ? ' (' + tierName(imp.to === 'steady' ? 'great' : 'amazing') + ' at ' + imp.next + ')' : ', already ' + tierName('amazing')) + '.';
     return q + ' · ' + bn + ': ' + tierName(imp.from) + ' → ' + tierName(imp.to);
   }
-  function statLine(id) { var it = R.ITEMS[id]; return '+' + it.amt + ' ' + statName(it.stat); }
+  // One format everywhere (v5.6 UX fix 2): the upgraded stat as a plain number, "Wayfinding 5". The gear level is "+2" after the name.
+  function plusOf(id) { return root.Progress ? root.Progress.plusOf(S(), id) : 1; }
+  function statLine(id) { var it = R.ITEMS[id]; return statName(it.stat) + ' ' + (it.amt + plusOf(id) - 1); }
+  function gTitle(id) { return gName(id) + (plusOf(id) > 1 ? ' +' + plusOf(id) : ''); }
+  function rarTitle(r) { return r.charAt(0).toUpperCase() + r.slice(1); }
   function forkName() { var f = S().rpg.fork; return f && S().rpg.nodes.fork ? ST().tree.sides[f][0] : null; }
 
   /* ---------- Today: the quest tile (below the check-in card) ---------- */
@@ -94,7 +98,7 @@
         '<div class="beat-row">' + p.map(function (r, i) { return beatChip(r, q.id, i); }).join('') + '</div>' +
         '<div class="qb-acts"><button class="btn btn-dark" data-act="qs-send" data-q="' + q.id + '">Get ready + Send</button><button class="btn btn-soft" data-act="qs-gear" data-q="' + q.id + '">Change gear</button></div></div>';
     }).join('');
-    return '<p class="muted qb-lede">Chips show how each beat will go with ' + esc(nm()) + '’s best gear. Same gear, same result, every time.</p>' + cards + packRow() +
+    return '<p class="muted qb-lede">Each line shows how that part of the trip will go with ' + esc(nm()) + '’s best gear. Same gear, same result, every time.</p>' + (root.ProgressUI ? root.ProgressUI.lookForRow() : '') + cards + packRow() +
       '<p class="muted sm qb-foot">' + esc(tm.terms.trips) + ' never fail. The worst result is Steady, plus a story. Every ' + esc(tm.terms.trip.toLowerCase()) + ' pays the same XP.</p>';
   }
   function board() {
@@ -154,11 +158,14 @@
     var r = St.openTrip(); if (!r) return;
     ui.last = r;
     U.sfx('chest');
-    var cards = h.finds.map(function (f, i) { var a = Th.findArt(tm, f.id); return '<div class="rcard flipped r-' + f.rarity + '" style="animation-delay:' + (i * 120) + 'ms"><div class="rc-in"><div class="rc-face rc-back">?</div><div class="rc-face rc-front"><span class="em">' + a.icon + '</span><span class="nm">' + esc(a.name) + '</span><span class="tag">' + (f.dup ? 'Duplicate' : 'New!') + '</span></div></div></div>'; }).join('');
-    var gear = (h.gear || []).map(function (g) {
+    var seenNew = {};
+    var cards = h.finds.map(function (f, i) { var a = Th.findArt(tm, f.id), isNew = !f.dup && !seenNew[f.id]; if (isNew) seenNew[f.id] = 1; return '<div class="rcard flipped r-' + f.rarity + '" style="animation-delay:' + (i * 120) + 'ms"><div class="rc-in"><div class="rc-face rc-back">?</div><div class="rc-face rc-front"><span class="em">' + a.icon + '</span><span class="nm">' + esc(a.name) + '</span><span class="tag">' + (f.fuelStars ? 'Extra copy: +25 ★' : isNew ? 'New!' : 'Spare') + '</span></div></div></div>'; }).join('');
+    var ga = r.gearArrive || [];
+    var gear = (h.gear || []).map(function (g, gi) {
+      var arr = ga[gi] || {};
       var it = R.ITEMS[g.id], imp = g.dup ? null : R.gearImpact(g.id, cs(), St.bag(), St.regionTier());
-      return '<div class="gear-card r-' + it.rarity + '"><span class="gc-ic">' + it.icon + '</span><div class="grow"><div class="gc-name">' + esc(gName(g.id)) + ' <span class="rar ' + (it.rarity === 'legendary' ? 'epic' : it.rarity) + '">' + it.rarity + '</span></div><div class="gc-stat">' + esc(ST().slots[it.slot]) + ' · ' + esc(statLine(g.id)) + '</div>' +
-        '<div class="gc-imp">' + (g.dup ? 'You have one already. Saved for the Workbench (coming later).' : imp ? '⬆ Turns ' + esc(impactText(imp)) : 'Ready for the next ' + esc(tm.terms.trip.toLowerCase()) + '.') + '</div></div></div>';
+      return '<div class="gear-card r-' + it.rarity + '"><span class="gc-ic">' + it.icon + '</span><div class="grow"><div class="gc-name">' + esc(gTitle(g.id)) + ' <span class="rar ' + (it.rarity === 'legendary' ? 'epic' : it.rarity) + '">' + it.rarity + '</span></div><div class="gc-stat">' + esc(ST().slots[it.slot]) + ' · ' + esc(statLine(g.id)) + '</div>' +
+        '<div class="gc-imp">' + (arr.kind === 'plus' ? 'Another ' + esc(gName(g.id)) + '! Yours is now +' + arr.plus + '. ' + esc(statName(it.stat)) + ' ' + (it.amt + arr.plus - 2) + ' → ' + (it.amt + arr.plus - 1) + '.' : arr.kind === 'stars' ? esc(gName(g.id)) + ' is fully upgraded, so this one became 100 Stars.' : imp ? '⬆ Turns ' + esc(impactText(imp)) : 'Ready for the next ' + esc(tm.terms.trip.toLowerCase()) + '.') + '</div></div></div>';
     }).join('');
     var lines = '<span>+' + h.stars + ' ★</span><span>+' + (h.compXp || R.XP.quest) + ' XP for ' + esc(nm()) + '</span>' + (r.powerUp && !r.powerUp.converted ? '<span>+1 ' + esc(tm.powerUps[r.powerUp.type].name) + '</span>' : '');
     var fuel = '';
@@ -217,7 +224,7 @@
     var s = S(), li = R.levelInfo(s.compLevel.xp), st = St.stage(), c = cs(), stats = R.stats(c, s.inventory.equipped), cm = th().camp;
     var next = E.nextGrowth(s.camp.total), treeOpen = st >= R.TREE_OPENS, sp = St.spFree();
     var statsHtml = R.STATS.map(function (k) { return '<div class="cp-stat"><span class="cs-ic">' + statIc(k) + '</span><span class="cs-v">' + stats[k] + '</span><span class="cs-l">' + esc(statName(k)) + '</span></div>'; }).join('');
-    var slots = ['tool', 'garb', 'trinket'].map(function (sl) { var id = s.inventory.equipped[sl]; return '<button class="cp-slot ' + (id ? 'r-' + R.ITEMS[id].rarity : '') + '" data-act="cp-slot" data-slot="' + sl + '"><span class="cps-ic">' + (id ? R.ITEMS[id].icon : '＋') + '</span><span class="cps-t"><small>' + esc(ST().slots[sl]) + '</small>' + esc(id ? gName(id) : 'Empty') + (id ? '<small>' + esc(statLine(id)) + '</small>' : '') + '</span></button>'; }).join('');
+    var slots = ['tool', 'garb', 'trinket'].map(function (sl) { var id = s.inventory.equipped[sl]; return '<button class="cp-slot ' + (id ? 'r-' + R.ITEMS[id].rarity : '') + '" data-act="cp-slot" data-slot="' + sl + '"><span class="cps-ic">' + (id ? R.ITEMS[id].icon : '＋') + '</span><span class="cps-t"><small>' + esc(ST().slots[sl]) + '</small>' + esc(id ? gTitle(id) : 'Empty') + (id ? '<small>' + esc(statLine(id)) + '</small>' : '') + '</span></button>'; }).join('');
     var pages = s.book.pages.length;
     return '<div class="nav-h"><button class="back" data-act="back">' + A.icon('back') + 'Back</button><div class="title">' + esc(nm()) + '</div></div>' +
       '<section class="cp-hero"><div class="cp-art">' + A.companion(def(), 'happy', { aura: !!(root.CampUI && root.CampUI.aura()) }) + '</div>' +
@@ -225,13 +232,22 @@
       '<div class="cp-lv"><span class="lv-ring">Lv ' + li.level + '</span><div class="xpbar" aria-label="' + li.into + ' of ' + li.need + ' XP to level ' + (li.level + 1) + '"><i style="width:' + Math.round(100 * li.into / li.need) + '%"></i></div><span class="muted sm">' + li.into + ' / ' + li.need + '</span></div></section>' +
       '<div class="card"><h3>Stats</h3><div class="cp-stats">' + statsHtml + '</div><p class="muted sm">From level, skills and the gear below.</p></div>' +
       '<div class="card"><h3>Gear</h3><div class="cp-slots">' + slots + '</div><p class="muted sm">' + St.bag().length + ' pieces in the bag. Gear is never used up and never sold. “Get ready” on the board picks the best set for you.</p></div>' +
+      '<div class="card"><div class="row"><div class="grow"><h3>' + esc(th().terms.bench) + '</h3><p>' + (root.Progress.benchOpen(s) ? 'Make ' + esc(nm()) + '’s gear stronger with spares.' : 'Opens on day ' + root.Progress.BENCH_DAY + ' of ' + esc(nm()) + '’s journey.') + '</p></div><button class="btn ' + (root.Progress.benchOpen(s) ? 'btn-dark' : 'btn-soft') + '" data-act="go" data-to="workbench">' + (root.Progress.benchOpen(s) ? 'Open' : 'Peek') + '</button></div></div>' +
+      looksCard() +
       '<div class="card"><div class="row"><div class="grow"><h3>' + esc(ST().tree.name) + ' skills</h3><p>' + (treeOpen ? sp + ' point' + (sp === 1 ? '' : 's') + ' to spend' : 'The first skill tree opens at day ' + E.GROWTH[R.TREE_OPENS] + ' (' + esc(cm.stages[R.TREE_OPENS]) + '). ' + Math.max(0, E.GROWTH[R.TREE_OPENS] - s.camp.total) + ' days of play to go.') + '</p></div><button class="btn ' + (treeOpen ? 'btn-dark' : 'btn-soft') + '" data-act="go" data-to="tree">' + (treeOpen ? 'Open' : 'Peek') + '</button></div></div>' +
       '<div class="card"><div class="row"><div class="grow"><h3>📖 The Book</h3><p>' + pages + ' page' + (pages === 1 ? '' : 's') + ' so far, plus the ' + esc(ST().book.journal) + '.</p></div><button class="btn btn-soft" data-act="go" data-to="book">Read</button></div></div>' +
       '<div class="card"><h3>Where XP comes from</h3><ul class="cp-how"><li>Any honest answer on the same day: the same ' + R.XP.answerDay + ' XP a day, whatever the answer, however many medicines.</li><li>Feeding ' + esc(nm()) + ': ' + R.XP.feed + ' · the Daily Run: ' + R.XP.runBase + '–' + R.runXp(3) + ' · each ' + esc(th().terms.trip.toLowerCase()) + ': ' + R.XP.quest + ' · daily quests: ' + R.XP.daily + ' each.</li><li>No cap. Growing up comes from days played, so the bar never stops.</li></ul></div><div style="height:20px"></div>';
   }
+  // v5.6: looks you own (Shop, Season Pass, crew banner). Looks only: no stats.
+  function looksCard() {
+    var s = S(), lk = s.looks || { owned: [], equipped: {} }, cat = root.Progress.CATALOG, own = (lk.owned || []).filter(function (id) { return /^look\./.test(id) || /^pass\.look/.test(id) || /^passx\./.test(id); });
+    if (!own.length) return '';
+    var name = function (id) { var it = cat.filter(function (x) { return x.id === id; })[0]; return it ? (it.names[s.theme] || it.names.expedition) : /^passx\./.test(id) ? 'Season Pass look ' + id.split('.')[1] : /^pass\.look/.test(id) ? 'Season look ' + (+id.slice(-1) + 1) : 'A look'; };
+    return '<div class="card looks-card"><h3>Looks</h3>' + own.map(function (id) { var on = lk.equipped && lk.equipped.companion === id; return '<div class="row lk-row"><span class="grow">' + esc(name(id)) + '</span><button class="btn ' + (on ? 'btn-soft' : 'btn-dark') + '" data-act="look-wear" data-id="' + (on ? '' : id) + '">' + (on ? 'Wearing · Take off' : 'Wear') + '</button></div>'; }).join('') + '<p class="muted sm">Looks change how ' + esc(nm()) + ' looks. Nothing else.</p></div>';
+  }
   function slotSheet(sl) {
     var s = S(), items = St.bag().filter(function (id) { return R.ITEMS[id].slot === sl; });
-    U.sheet(ST().slots[sl], '<div class="opt-list"><button class="opt" data-act="cp-equip" data-slot="' + sl + '" data-id=""><span class="o-t">Nothing</span></button>' + items.map(function (id) { var it = R.ITEMS[id]; return '<button class="opt ' + (s.inventory.equipped[sl] === id ? 'on' : '') + '" data-act="cp-equip" data-slot="' + sl + '" data-id="' + id + '"><span style="font-size:1.8rem">' + it.icon + '</span><span><span class="o-t" style="display:block">' + esc(gName(id)) + '</span><span class="o-s">' + esc(statLine(id)) + ' · ' + it.rarity + (it.perk ? ' · ' + esc(ST().perk) : '') + '</span></span></button>'; }).join('') + '</div>');
+    U.sheet(ST().slots[sl], '<div class="opt-list"><button class="opt" data-act="cp-equip" data-slot="' + sl + '" data-id=""><span class="o-t">Nothing</span></button>' + items.map(function (id) { var it = R.ITEMS[id]; return '<button class="opt ' + (s.inventory.equipped[sl] === id ? 'on' : '') + '" data-act="cp-equip" data-slot="' + sl + '" data-id="' + id + '"><span style="font-size:1.8rem">' + it.icon + '</span><span><span class="o-t" style="display:block">' + esc(gTitle(id)) + '</span><span class="o-s">' + esc(statLine(id)) + ' · ' + rarTitle(it.rarity) + (it.perk ? ' · ' + esc(ST().perk) : '') + '</span></span></button>'; }).join('') + '</div>');
   }
 
   /* ---------- the Pathfinder tree ---------- */
@@ -308,6 +324,7 @@
   }
   Object.assign(root.App.acts, {
     'quest-out': function () { outSheet(); },
+    'look-wear': function (el) { St.equipLook(el.getAttribute('data-id') || null); root.App.render(); U.toast(el.getAttribute('data-id') ? esc(nm()) + ' is wearing it.' : 'Back to the usual look.'); },
     'trip-send': function () { board(); },
     'trip-go': function (el) { send(St.questForDest(el.getAttribute('data-d')) || 'q1'); },
     'trip-open': openReturn, 'trip-unpack': unpack, 'qr-page': turnPage,

@@ -490,7 +490,7 @@
     else if (pctWorse >= 30) { out.pct = pctWorse; out.label = (tab === 'fast' ? 'Faster than ' : 'Fewer moves than ') + pctWorse + '% of players'; }
     else {
       out.label = game === 'word' ? 'Finished! Solved in ' + entry.primary + '.' :
-        game === 'memory' ? 'Finished! ' + entry.primary + (entry.primary === 1 ? ' slip.' : ' slips.') :
+        game === 'memory' ? 'Finished! ' + entry.primary + (entry.primary === 1 ? ' repeat miss.' : ' repeat misses.') :
         'Finished! ' + entry.primary + (entry.primary === 1 ? ' star.' : ' stars.');
     }
     if (game === 'trail' && tab === 'moves' && entry.primary === 3 && pop.par != null && entry.secondary <= pop.par) {
@@ -522,7 +522,7 @@
     var t = '';
     if (game === 'trail') t = e.primary + (e.primary === 1 ? ' star' : ' stars') + ' · ' + e.secondary + ' steps';
     else if (game === 'word') t = e.primary + (e.primary === 1 ? ' guess' : ' guesses');
-    else t = e.primary + (e.primary === 1 ? ' slip' : ' slips') + ' · ' + e.secondary + ' flips';
+    else t = e.primary + (e.primary === 1 ? ' repeat miss' : ' repeat misses') + ' · ' + e.secondary + ' flips';
     if (withTime && e.tertiary != null) t += ' · ' + fmtTime(e.tertiary);
     return t;
   }
@@ -678,6 +678,11 @@
     var relax = mode === 'ranked' ? '<button type="button" class="ig-relax" data-act="relax">Play without the clock</button>' : '';
     return seg + relax;
   }
+  // v5.6 (A11): after the first play of a game, its rules collapse to "How to play ›" (the host passes opts.rulesSeen).
+  function rulesWrap(opts, html) {
+    if (!opts || !opts.rulesSeen) return html;
+    return '<details class="ag-rules"><summary class="ag-howto">How to play ›</summary>' + html + '</details>';
+  }
   var LeaderboardSim = {
     board: board, band: band, personal: personal, render: render, population: population,
     scoreText: scoreText, FRIENDS: FRIENDS, POP_N: POP_N
@@ -704,7 +709,7 @@
       hashStr: hashStr, makeRng: makeRng, rollRarity: rollRarity, upRarity: upRarity, esc: esc, cap: cap, fmtTime: fmtTime,
       normDiff: normDiff, Clock: Clock, svg: svg, IC: IC, PU: PU, FIND_NAMES: FIND_NAMES, prefersReduced: prefersReduced,
       itemArtFactory: itemArtFactory, Sheet: Sheet, packHtml: packHtml, packClick: packClick, packUsed: packUsed,
-      starsHtml: starsHtml, copyText: copyText, buzz: buzz, standingHtml: standingHtml, introControls: introControls
+      starsHtml: starsHtml, copyText: copyText, buzz: buzz, standingHtml: standingHtml, introControls: introControls, rulesWrap: rulesWrap
     }
   };
 

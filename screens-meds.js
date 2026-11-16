@@ -95,7 +95,21 @@
       (isNow ? '' : '<button type="button" class="cal-today" data-act="cal-month" data-d="0">Back to this month</button>') +
       '<div class="cal-grid" role="group" aria-label="' + MONTHS_LONG[mo.m] + ' ' + mo.y + '">' + ['S', 'M', 'T', 'W', 'T', 'F', 'S'].map(function (w, i) { return '<span class="cal-wd" aria-hidden="true">' + w + '</span>'; }).join('') + cells + '</div>' +
       '<p class="cal-sum">Logged on ' + logged + ' day' + (logged === 1 ? '' : 's') + ' in ' + MONTHS_LONG[mo.m] + '</p>' +
-      '<p class="cal-key">Each ring fills with what you took or did that day. A grey dot means another answer. Tap a day to see it.</p></div>';
+      (itemId ? '' : monthCounts(d1, dim)) +
+      '<p class="cal-key">Each ring fills with what you took or did that day. A small dot means you answered, but not “Taken”. Tap a day to see it.</p></div>';
+  }
+  /* v5.6 (A11): per-item counts for the month, counts only ("Lisinopril · taken on 12 days"). Each one taps to filter.
+   * Items with nothing logged this month aren't listed (no zeros, nothing that reads as a score). */
+  function monthCounts(d1, dim) {
+    var s = S(), rows = '';
+    s.meds.forEach(function (m) {
+      var n = 0;
+      for (var k = 0; k < dim; k++) { var day = d1 + k; if (day > s.day) break; var sm = daySum(dayRec(day), m.id); if (E.isAsNeeded(m) ? sm.prn > 0 : sm.done > 0) n++; }
+      if (!n) return;
+      var verb = E.isAsNeeded(m) ? 'logged' : isHabit(m) ? 'done' : 'taken';
+      rows += '<button type="button" class="cal-count" data-act="cal-filter" data-id="' + m.id + '">' + A.itemIcon(m) + '<span class="grow">' + esc(m.name) + '</span><span class="cc-n">' + verb + ' on ' + n + ' day' + (n === 1 ? '' : 's') + '</span>' + A.icon('chev') + '</button>';
+    });
+    return rows ? '<div class="cal-counts" aria-label="This month, by item">' + rows + '</div>' : '';
   }
   function weekStrip(itemId) {
     var s = S(), out = '';
@@ -107,7 +121,7 @@
   function daySheetBody(day) {
     var s = S(), rec = dayRec(day), rows = '';
     var y = St.yesterday(), canFix = y && y.dayNum === day && s.day - day <= 1;
-    if (!rec) rows = '<p class="ds-none">Nothing was logged.</p>';
+    if (!rec) rows = '<p class="ds-none">Not logged.</p>';
     else if (rec.rest || !rec.stacks.some(function (st) { return st.kind === 'dose'; })) {
       var e0 = rec.entries[rec.stacks[0] && rec.stacks[0].id];
       rows = '<p class="ds-none">Nothing was scheduled.' + (e0 && e0.state && e0.state !== 'none' && e0.at != null ? ' Checked in ' + E.fmtTime(e0.at) + '.' : '') + '</p>';
@@ -118,22 +132,38 @@
         rows += '<div class="ds-group"><div class="ds-gh">' + esc(st.label) + ' · ' + E.fmtTime(st.mins) + '</div>';
         st.doses.forEach(function (d) {
           var m = St.medById(d.medId), lab = E.recordLabel(e, st, { clock: rec.today ? s.clock : 1619, habit: isHabit(m), past: !rec.today });
+          // Two taps: keep both exact times ("Out 8:01 AM, swallowed 8:03 AM"), as "Did I take it?" always showed.
+          if (e.state === 'swallowed' && e.outAt != null && e.at != null && !e.loggedLater) lab = { label: 'Out ' + E.fmtTime(e.outAt) + ', swallowed ' + E.fmtTime(e.at), tone: lab.tone, icon: lab.icon };
           // Past days: tap a row to fix it (v5.5 round 2). Today: the check-in lives on Today, so a row opens the item.
           rows += (rec.today ? '<button type="button" class="ds-row" data-act="go" data-to="medDetail" data-id="' + d.medId + '">' : '<button type="button" class="ds-row" data-act="ds-entry" data-d="' + day + '" data-s="' + st.id + '" data-m="' + d.medId + '" aria-label="' + esc((m ? m.name : '') + ', ' + lab.label + '. Change this entry') + '">') + A.itemIcon(m || {}) + '<span class="grow"><span class="ds-n">' + esc(m ? m.name : 'Removed item') + (d.label ? ' ' + esc(d.label) : '') + '</span></span><span class="status ' + lab.tone + '">' + lab.icon + ' ' + esc(lab.label) + '</span>' + A.icon('chev') + '</button>';
         });
         var notTaken = e.state === 'didnt';
-        if (notTaken && !stackHabitOnly(st)) rows += '<button type="button" class="ds-help" data-act="mie-open" data-m="' + (st.doses[0] && st.doses[0].medId) + '">Make it easier ›</button>';
+        if (notTaken) rows += '<button type="button" class="ds-help" data-act="mie-open" data-m="' + (st.doses[0] && st.doses[0].medId) + '" data-d="' + day + '">Make it easier ›</button>';
         if (canFix && (e.state === 'none' || e.state === 'unsure') && !(y.paid && y.paid[st.id])) rows += '<div class="btn-row ds-fix"><button class="btn btn-soft" data-act="backfill" data-s="' + st.id + '" data-a="took">' + (stackHabitOnly(st) ? 'I did it' : 'I took it') + '</button><button class="btn btn-soft" data-act="backfill" data-s="' + st.id + '" data-a="didnt">' + (stackHabitOnly(st) ? 'Not that day' : 'Didn’t take') + '</button></div>';
         if (rec.today && !e.state || (rec.today && e.state === 'out')) rows += '<button type="button" class="ds-help" data-act="tab" data-t="today">Check in on Today ›</button>';
         rows += '</div>';
       });
     }
     var prn = (rec && rec.prn || []).filter(function (p) { return p.medId; });
+    var notes = St.notesFor(day);
+    if (notes.length) rows += '<div class="ds-group"><div class="ds-gh">Your notes</div>' + notes.map(function (n) { var m = n.itemId && St.medById(n.itemId); return '<div class="ds-note"><span class="ds-note-h">' + esc(m ? m.name : 'Note') + (n.kind === 'refill' ? ' · refill' : '') + (n.at != null ? ' · ' + E.fmtTime(n.at) : '') + '</span>' + esc(n.text) + '</div>'; }).join('') + '</div>';
     if (prn.length) rows += '<div class="ds-group"><div class="ds-gh">As needed</div>' + prn.map(function (p) { var m = St.medById(p.medId); return '<div class="ds-row static">' + A.itemIcon(m || {}) + '<span class="grow ds-n">' + esc(m ? m.name : '') + '</span><span class="status neutral">Logged ' + E.fmtTime(p.at) + '</span></div>'; }).join('') + '</div>';
     return '<div class="ds-nav"><button type="button" class="cal-nav" data-act="ds-nav" data-d="' + (day - 1) + '" aria-label="Previous day"' + (day - 1 < firstDay() ? ' disabled' : '') + '>‹</button><b>' + esc(E.fmtDateLong(day)) + '</b><button type="button" class="cal-nav" data-act="ds-nav" data-d="' + (day + 1) + '" aria-label="Next day"' + (day + 1 > s.day ? ' disabled' : '') + '>›</button></div>' +
       rows + (rec && !rec.today ? '<p class="ds-foot">Tap a line to change it.</p>' : '') + '<p class="ds-foot">This shows what you logged. It isn’t medical advice.</p>';
   }
   function daySheet(day) { U.sheet('Your day', daySheetBody(day), { clin: true }); }
+  /* ---------- v5.6 refill reminder card (A7): on Today every day and on My list, until the person answers ---------- */
+  function refillCard(m) {
+    var n = St.daysLeft(m), left = n == null ? '' : n <= 0 ? 'It may be out now.' : 'About ' + n + ' day' + (n === 1 ? '' : 's') + ' left.';
+    void left;
+    // "(555) 013-4 ext 2": dial the number; show the extension as text
+    var ph = splitPhone(m.pharmacy || '');
+    var call = m.pharmacy ? '<a class="btn btn-clin-2" href="tel:' + esc(ph.main) + '">Call pharmacy' + (ph.ext ? ' <small>then ext ' + esc(ph.ext) + '</small>' : '') + '</a>' : '<button type="button" class="btn btn-clin-2" data-act="refill-phone" data-m="' + m.id + '">Call pharmacy</button>';
+    return '<section class="refill-card" aria-label="Refill time for ' + esc(m.name) + '"><div class="rf-h">' + A.itemIcon(m) + '<div class="grow"><h3>Refill time for ' + esc(m.name) + '.</h3><p>' + esc(left) + (St.refillWillPay(m) ? ' Tap Refill’s in when you have it: +' + St.CARE_REWARD.stars + ' ★' : ' Tap Refill’s in when you have it.') + '</p></div></div>' +
+      '<div class="rf-acts"><button type="button" class="btn btn-clin" data-act="refill-in" data-m="' + m.id + '">Refill’s in</button>' + call + '<button type="button" class="btn btn-clin-2" data-act="refill-other" data-m="' + m.id + '">Something else</button></div></section>';
+  }
+  function splitPhone(s) { var m = /^(.*?)(?:\s*(?:ext\.?|extension|x|#)\s*(\d+))\s*$/i.exec(String(s)); var main = (m ? m[1] : String(s)).replace(/[^0-9+]/g, ''); return { main: main, ext: m ? m[2] : '' }; }
+  function refillCards() { return St.refillsDue().map(refillCard).join(''); }
 
   /* ---------- My list ---------- */
   function render() {
@@ -162,18 +192,7 @@
   }
   function extrasHtml() {
     var s = S(), out = '';
-    s.meds.forEach(function (m) {
-      if (E.isAsNeeded(m) || m.paused || E.isEnded(m, s.day) || m.supply == null || St.supplyLeft(m) > 7) return;
-      var q = St.careQuest(m.id, 'refill');
-      if (q.dissolved) {
-        var sw = St.careQuest(m.id, 'swap'), tm = root.Theme.T(S());
-        out += '<div class="carequest"><span class="cq-ic">' + A.icon('book') + '</span><div class="grow"><h4>Fresh goal: browse your ' + esc(tm.terms.album) + '</h4><p>' + (sw.done ? 'Done.' : 'Same reward as before: +' + St.CARE_REWARD.stars + ' ★') + '</p></div>' +
-          (sw.done ? '<span class="status done">✓ Done</span>' : '<button class="btn btn-clin-2" data-act="swap-quest" data-m="' + m.id + '">Go</button>') + '</div>';
-        return;
-      }
-      out += '<div class="carequest"><span class="cq-ic">' + A.icon('pill') + '</span><div class="grow"><h4>Refill ' + esc(m.name) + ' soon</h4><p>' + (q.done ? 'Done. Thanks for staying stocked up.' : 'About ' + St.supplyLeft(m) + ' days left. Same reward whenever you do it: +' + St.CARE_REWARD.stars + ' ★') + '</p></div>' +
-        (q.done ? '<span class="status done">✓ Done</span>' : '<button class="btn btn-clin-2" data-act="refill" data-m="' + m.id + '">Start</button>') + '</div>';
-    });
+    out += refillCards();
     var first = s.meds.filter(function (m) { return !E.isAsNeeded(m) && E.itemType(m) === 'med'; })[0];
     if (first) {
       var fq = St.careQuest(first.id, 'followup');
@@ -197,35 +216,33 @@
     return '';
   }
 
-  /* ---------- "Make it easier": one component, reachable after "Didn't take", from the calendar and from item detail ---------- */
-  var REASONS = [
-    ['busy', 'Got busy or forgot'], ['away', 'Away from home'], ['ranout', 'Ran out'], ['side', 'Side effects'], ['cost', 'Cost'], ['other', 'Something else']
-  ];
-  function reasonsHtml(itemId) {
-    var m = St.medById(itemId), list = isHabit(m) ? REASONS.filter(function (r) { return r[0] === 'busy' || r[0] === 'away' || r[0] === 'other'; }) : REASONS;
-    return '<div class="mie"><p class="mie-h">Want help making tomorrow easier?</p><p class="mie-q">What got in the way? <span class="muted">(optional)</span></p>' +
-      '<div class="mie-chips">' + list.map(function (r) { return '<button type="button" class="chip-btn mie-chip" data-act="mie-pick" data-b="' + r[0] + '" data-m="' + (itemId || '') + '">' + r[1] + '</button>'; }).join('') + '</div></div>';
+  /* ---------- "Make it easier" (v5.6 A1): one optional free-text box, then the same plain actions every time ----------
+   * No list of reasons to pick from (a list reads as "these are the only answers"). The text goes on that day's record and
+   * shows in the day sheet. The actions are buttons: change the time, turn on or adjust a reminder, keep it where you'll see it. */
+  function easierHtml(itemId, day) {
+    var m = St.medById(itemId), hab = isHabit(m), on = m && m.reminders !== false;
+    day = day == null ? S().day : day;
+    // One label, one optional box. Whatever is typed is saved when the sheet closes (Done, ×, swipe) or an action is tapped.
+    return '<div class="mie" data-m="' + (itemId || '') + '" data-d="' + day + '">' +
+      '<label class="mie-q" for="mieText">Anything get in the way? <span class="muted">(optional)</span></label>' +
+      '<textarea class="input mie-text" id="mieText" rows="2" maxlength="280" placeholder="Type anything. Only you see this. It’s saved to your day."></textarea>' +
+      (m ? '<div class="mie-acts" role="group" aria-label="Things that can help">' +
+        (E.isAsNeeded(m) ? '' : '<button type="button" class="opt mie-act" data-act="mie-time" data-m="' + m.id + '"><span class="mie-ai" aria-hidden="true">◷</span><span><span class="o-t" style="display:block">Change the time</span><span class="o-s">' + esc(timesLine(m)) + '</span></span></button>') +
+        (E.isAsNeeded(m) ? '' : '<button type="button" class="opt mie-act" data-act="mie-rem" data-m="' + m.id + '"><span class="mie-ai" aria-hidden="true">🔔</span><span><span class="o-t" style="display:block">' + (on ? 'Adjust the reminder' : 'Turn on a reminder') + '</span><span class="o-s">' + (on ? 'Reminders are on for this one' : 'Reminders are off for this one') + '</span></span></button>') +
+        '<button type="button" class="opt mie-act" data-act="mie-tips" aria-expanded="false" aria-controls="mieTips"><span class="mie-ai" aria-hidden="true">👀</span><span><span class="o-t" style="display:block">Keep it where you’ll see it</span><span class="o-s">A few ideas</span></span></button>' +
+        '<ul class="mie-tips" id="mieTips" hidden>' + (hab
+          ? '<li>Leave what you need out, like a water bottle on your desk.</li><li>Do it right after something you already do, like brushing your teeth.</li><li>A sticky note where you’ll see it helps.</li>'
+          : '<li>Next to something you use every day, like your toothbrush or coffee.</li><li>A weekly pill box makes it easy to see.</li><li>For days out, a small bag by your keys.</li>') + '</ul></div>' : '') + '</div>';
   }
+  function timesLine(m) { return 'Now: ' + E.expandTimes(E.schedOf(m).times).map(function (t) { return E.fmtTime(E.toMins(t)); }).join(', '); }
   function itemTimeFor(m) { var t = S().today, st = t && t.plan.stacks.filter(function (x) { return x.doses.some(function (d) { return d.medId === m.id; }); })[0]; return st ? st.doses.filter(function (d) { return d.medId === m.id; })[0].mins || st.mins : E.gameMins(E.expandTimes(E.schedOf(m).times)[0]); }
-  function resultHtml(b, itemId) {
-    var m = St.medById(itemId), nm = m ? m.name : 'it', med = m && !isHabit(m), close = '<button type="button" class="btn btn-ghost btn-block mie-done" data-act="sheet-close">Done</button>';
-    if (b === 'busy') {
-      var from = m ? itemTimeFor(m) : 480, to = from + 30;
-      return '<div class="mie-res"><h3>Try a reminder at a time that fits better</h3><p>Small moves help. You can always change it again.</p><div class="opt-list">' +
-        (m ? '<button type="button" class="opt" data-act="mie-time" data-m="' + m.id + '" data-from="' + from + '" data-to="' + to + '"><span class="o-t">Use ' + E.fmtTime(to) + '</span></button><button type="button" class="opt" data-act="mie-edit" data-m="' + m.id + '"><span class="o-t">Pick another time</span></button>' : '') +
-        (med && !(m.twoStep) ? '<button type="button" class="opt" data-act="mie-two" data-m="' + m.id + '"><span><span class="o-t" style="display:block">Turn on two taps</span><span class="o-s">Pill out when it’s in your hand, then Swallowed</span></span></button>' : '') + '</div>' + close + '</div>';
-    }
-    if (b === 'away') return '<div class="mie-res"><h3>Pack it the night before</h3><p>A small bag by your keys or in your travel kit helps.</p><div class="opt-list"><button type="button" class="opt" data-act="mie-ack" data-msg="We’ll remind you tonight at 9:00 PM."><span class="o-t">Remind me at 9:00 PM to pack it</span></button></div>' + close + '</div>';
-    if (b === 'ranout') return '<div class="mie-res"><h3>Let’s get a refill going</h3><ol><li>Call or tap refill in your pharmacy’s app</li><li>If it needs a new prescription, the pharmacy can ask your prescriber</li><li>Pick it up or get it delivered</li></ol><div class="opt-list"><button type="button" class="opt" data-act="fake-call" data-who="pharmacy"><span class="o-t">Call pharmacy</span></button>' + (m && E.itemType(m) === 'med' ? '<button type="button" class="opt" data-act="mie-supply" data-m="' + m.id + '"><span class="o-t">Set how much I have</span></button>' : '') + '<button type="button" class="opt" data-act="mie-pick" data-b="stock" data-m="' + (itemId || '') + '"><span class="o-t">The pharmacy is out of stock ›</span></button></div>' + close + '</div>';
-    if (b === 'stock') return '<div class="mie-res"><h3>Out of stock</h3><p>Pharmacies can often check other locations or transfer the prescription. Your prescriber can suggest an alternative if it stays out of stock.</p><div class="opt-list"><button type="button" class="opt" data-act="fake-call" data-who="pharmacy"><span class="o-t">Call pharmacy</span></button></div>' + close + '</div>';
-    if (b === 'side') return '<div class="mie-res"><h3>Side effects are worth mentioning</h3><p>Tell your prescriber or pharmacist about them. Don’t stop a medicine without talking to them first.</p><div class="opt-list"><button type="button" class="opt" data-act="mie-note" data-m="' + (itemId || '') + '"><span class="o-t">Add a note for my next visit</span></button><button type="button" class="opt" data-act="fake-call" data-who="pharmacy"><span class="o-t">Call pharmacy</span></button></div>' + close + '</div>';
-    if (b === 'cost') return '<div class="mie-res"><h3>Help with costs</h3><ul><li>A generic version, if there is one</li><li>A 90-day supply or mail-order pharmacy</li><li>The maker’s savings or patient-assistance program</li><li>A pharmacist review of your list</li></ul><div class="opt-list"><button type="button" class="opt" data-act="fake-call" data-who="pharmacy"><span class="o-t">Call pharmacy</span></button></div>' + close + '</div>';
-    if (b === 'stop') return '<div class="mie-res"><h3>That’s a decision to make with your care team</h3><p>Please talk with your prescriber or pharmacist before stopping ' + esc(nm) + '. Some medicines need a plan to stop safely.</p><div class="opt-list"><button type="button" class="opt" data-act="mie-note" data-m="' + (itemId || '') + '"><span class="o-t">Add a note for my next visit</span></button><button type="button" class="opt" data-act="fake-call" data-who="pharmacy"><span class="o-t">Call pharmacy</span></button></div>' + close + '</div>';
-    return '<div class="mie-res"><h3>Anything you want to remember?</h3><textarea class="input mie-text" id="mieText" rows="3" placeholder="Optional. Only you see this."></textarea>' + (med ? '<div class="opt-list" style="margin-top:8px"><button type="button" class="opt" data-act="mie-pick" data-b="stop" data-m="' + (itemId || '') + '"><span class="o-t">I decided to stop</span></button></div>' : '') + '<button type="button" class="btn btn-clin btn-block" data-act="mie-save" style="margin-top:10px">Save note</button>' + close + '</div>';
-  }
-  function refreshSheet(html) { var t = U.topOverlay(); var b = t && t.el.querySelector('.sh-body'); if (b) { b.innerHTML = html; var f = b.querySelector('button, textarea'); if (f) try { f.focus({ preventScroll: true }); } catch (e) { } } }
-  function mieOpen(itemId) { var m = St.medById(itemId); U.sheet('Make it easier', reasonsHtml(itemId) + '<button type="button" class="btn btn-ghost btn-block" data-act="sheet-close">Not now</button>', { clin: true, sub: m ? esc(itemName(m)) : '' }); }
+  function mieOpen(itemId, day) { var m = St.medById(itemId); U.sheet('Make it easier', easierHtml(itemId, day) + '<button type="button" class="btn btn-clin btn-block" data-act="sheet-close">Done</button>', { clin: true, sub: m ? esc(itemName(m)) : '', beforeClose: function () { kept = keepTyped(); }, onClose: function () { if (kept) { kept = false; root.App.render(); U.toast('Saved to your day.'); } } }); }
+  var kept = false;
+  function savedOnClose() { if (keepTyped()) { root.App.render(); U.toast('Saved to your day.'); } }
+  function sheetSaveOpts() { return { beforeClose: function () { kept = keepTyped(); }, onClose: function () { if (kept) { kept = false; root.App.render(); U.toast('Saved to your day.'); } } }; }
   function barrierSheet(medId) { U.closeAll(); mieOpen(medId); }
+  // Save what's typed (if anything) before an action moves on, so nothing typed is ever thrown away.
+  function keepTyped() { var t = document.getElementById('mieText'), box = t && t.closest('.mie'); if (t && box && t.value.trim()) { St.addNote(+box.getAttribute('data-d'), box.getAttribute('data-m') || null, t.value); t.value = ''; return true; } return false; }
 
   /* ---------- item detail ---------- */
   function detail(p) {
@@ -235,7 +252,7 @@
     var status = E.isEnded(m, s.day) ? 'Finished' : m.paused ? (E.isPaused(m, s.day) ? 'Paused' : 'Paused from tomorrow') : '';
     var rows = '<button type="button" class="kv kv-btn" data-act="ie-edit" data-m="' + m.id + '" data-s="2"><span class="k">When</span><span class="v">' + esc(E.scheduleSentence(m)) + (rng ? '<br><span class="kv-sub">' + esc(rng) + '</span>' : '') + '</span>' + A.icon('chev') + '</button>' +
       (an ? '' : '<button type="button" class="kv kv-btn" data-act="ie-edit" data-m="' + m.id + '" data-s="3"><span class="k">Reminders</span><span class="v">' + (m.reminders === false ? 'Off for this one' : s.settings.reminders ? 'On, no name on the lock screen' : 'Off for everything (in Me)') + (E.itemType(m) !== 'habit' ? (m.twoStep || (m.twoStep == null && s.settings.twoStep) ? ' · Two taps' : ' · One tap') : '') + '</span>' + A.icon('chev') + '</button>') +
-      (m.supply != null && E.itemType(m) === 'med' ? '<button type="button" class="kv kv-btn" data-act="ie-edit" data-m="' + m.id + '" data-s="3"><span class="k">Supply</span><span class="v">About ' + St.supplyLeft(m) + ' days left</span>' + A.icon('chev') + '</button>' : '');
+      (E.itemType(m) !== 'habit' && !E.isAsNeeded(m) ? '<button type="button" class="kv kv-btn" data-act="ie-edit" data-m="' + m.id + '" data-s="3"><span class="k">Supply</span><span class="v">' + esc(m.supply == null ? 'Not tracked' : St.supplyText(m) + ' · ' + St.supplyLeft(m) + ' on hand') + '</span>' + A.icon('chev') + '</button>' : '');
     var steps = E.schedOf(m).doseSteps;
     var taper = steps && steps.length ? '<div class="clin-label">Dose changes over time</div><div class="clin-group">' + steps.map(function (st, i) { var next = steps[i + 1]; var on = s.day >= st.from && (!next || s.day < next.from); return '<div class="kv"><span class="k">' + E.fmtDate(st.from) + (next ? ' to ' + E.fmtDate(next.from - 1) : ' on') + '</span><span class="v">' + esc(st.label) + (on ? ' · now' : '') + '</span></div>'; }).join('') + '</div>' : '';
     var rec;
@@ -246,7 +263,7 @@
       rec = '<div class="clin-label">Recent logs</div><div class="clin-group">' + (logs.length ? logs.slice(0, 8).map(function (l) { return '<div class="rec-row"><span class="d">' + (l.day === s.day ? 'Today' : E.fmtDate(l.day)) + '</span><span>Logged ' + E.fmtTime(l.at) + '</span></div>'; }).join('') : '<div class="rec-row"><span>No logs yet.</span></div>') + '</div>';
     } else rec = '<div class="clin-label">Last 7 days</div><div class="clin-card">' + weekStrip(m.id) + '<button type="button" class="cal-see" data-act="cal-see" data-id="' + m.id + '">See in calendar ›</button></div>';
     return '<div class="clin"><div class="nav-h"><button class="back" data-act="back">' + A.icon('back') + 'My list</button><div class="title"></div></div>' +
-      '<div class="page-h row" style="gap:14px">' + A.itemIcon(m, 'lg') + '<div><h1 style="font-size:1.6rem">' + esc(m.name) + '</h1><p>' + esc([E.doseLabel(m, s.day), { med: 'Medicine', vitamin: 'Vitamin or supplement', habit: 'Habit' }[E.itemType(m)], status].filter(Boolean).join(' · ')) + '</p></div></div>' +
+      '<div class="page-h row" style="gap:14px">' + A.itemIcon(m, 'lg') + '<div><h1 style="font-size:1.6rem">' + esc(m.name) + '</h1><p>' + esc([E.doseLabel(m, s.day), (E.itemType(m) === 'other' ? (m.typeLabel || 'Other') : { med: 'Medicine', vitamin: 'Vitamin or supplement', habit: 'Habit' }[E.itemType(m)]), status].filter(Boolean).join(' · ')) + '</p></div></div>' +
       (nx ? '<p class="det-next">Next: ' + esc(nx.label) + '</p>' : nd != null ? '<p class="det-next">Next: ' + esc(E.fmtDate(nd)) + '</p>' : '') +
       (m.highRisk ? '<div class="assist" style="border-left-color:#1d5fd1"><h3>Extra care medicine</h3><p>If this one isn’t logged for a while, Kindling shows a plain card asking you to check with your prescriber or pharmacist. No game on that card.</p></div>' : '') +
       '<div class="clin-group">' + rows + '</div>' + taper + rec +
@@ -258,18 +275,12 @@
       '</div><p style="margin:10px 18px 30px;font-size:.85rem;color:var(--clin-muted);font-weight:600">Kindling records what you log. It doesn’t give dosing advice. Your label, pharmacist and prescriber are the source for that.</p></div>';
   }
 
-  root.MedsUI = { render: render, assistCard: assistCard, barrierSheet: barrierSheet, mieOpen: mieOpen, reasonsHtml: reasonsHtml, resultHtml: resultHtml, daySheet: daySheet, dayRec: dayRec, daySum: daySum, calendarMonth: calendarMonth, ui: ui, itemName: itemName, isHabit: isHabit, stackHabitOnly: stackHabitOnly, resetWizard: function () { } };
+  root.MedsUI = { splitPhone: function (s) { return splitPhone(s); }, keepTyped: function () { return keepTyped(); }, savedOnClose: function () { savedOnClose(); }, sheetSaveOpts: sheetSaveOpts, render: render, assistCard: assistCard, barrierSheet: barrierSheet, mieOpen: mieOpen, easierHtml: easierHtml, reasonsHtml: easierHtml, refillCards: refillCards, refillCard: refillCard, daySheet: daySheet, daySheetBody: daySheetBody, dayRec: dayRec, daySum: daySum, calendarMonth: calendarMonth, ui: ui, itemName: itemName, isHabit: isHabit, stackHabitOnly: stackHabitOnly, resetWizard: function () { } };
   root.App.screens.meds = render;
   root.App.screens.medDetail = detail;
   root.App.screens.history = function () { ui.view = 'calendar'; return render(); };
   Object.assign(root.App.clinScreens, { meds: 1, medDetail: 1, history: 1 });
-  function afterPick(b, itemId) {
-    var tier = E.barrierTier(b === 'busy' ? 'busy' : b);
-    var r = St.answerBarrier(b, itemId || null);
-    if (tier >= 2 || b === 'stock' || b === 'stop') { S().flags.assist = null; St.save(); } // the help is shown right here, in context
-    refreshSheet(resultHtml(b, itemId));
-    return r;
-  }
+  var refillUndo = null;
   Object.assign(root.App.acts, {
     'ml-view': function (el) { ui.view = el.getAttribute('data-v'); root.App.render(); },
     'ie-add': function () { U.closeAll(); root.ItemEditor.open('add'); },
@@ -304,35 +315,66 @@
     'cal-see': function (el) { ui.filter = el.getAttribute('data-id'); ui.view = 'calendar'; ui.month = null; root.App.setTab('meds'); },
     'see-earlier': function () { U.closeAll(); ui.view = 'calendar'; ui.filter = null; ui.month = null; root.App.setTab('meds'); },
     barrier: function (el) { barrierSheet(el.getAttribute('data-m')); },
-    'mie-open': function (el) { U.closeAll(); mieOpen(el.getAttribute('data-m')); },
-    'mie-pick': function (el) { afterPick(el.getAttribute('data-b'), el.getAttribute('data-m') || null); },
+    'mie-open': function (el) { U.closeAll(); mieOpen(el.getAttribute('data-m'), el.getAttribute('data-d') != null ? +el.getAttribute('data-d') : null); },
+    // Change the time: the time wheel for the dose that's in question. Once there's an answer today, it starts tomorrow.
     'mie-time': function (el) {
-      var m = St.medById(el.getAttribute('data-m')), from = +el.getAttribute('data-from'), to = +el.getAttribute('data-to'); if (!m) return;
-      var it = JSON.parse(JSON.stringify(m)); it.schedule = JSON.parse(JSON.stringify(E.schedOf(m)));
-      var list = E.expandTimes(it.schedule.times).map(function (t) { return E.gameMins(t) === from ? E.hhmm(to) : t; });
-      it.schedule.times = { mode: 'list', list: E.expandTimes({ mode: 'list', list: list }) };
-      St.saveItem(it); U.closeAll(); root.App.render(); U.toast('Done. Tomorrow we’ll remind you at ' + E.fmtTime(to) + '.');
+      var m = St.medById(el.getAttribute('data-m')); if (!m) return; keepTyped();
+      var from = itemTimeFor(m); U.closeAll();
+      root.Wheel.sheet({ title: 'What time works better?', intro: 'For ' + esc(m.name) + '. You can always change it again.', cols: root.Wheel.timeCols(E.hhmm(from)), onDone: function (v) {
+        var to = E.gameMins(root.Wheel.timeFrom(v)); if (to === from) return;
+        var it = JSON.parse(JSON.stringify(m)); it.schedule = JSON.parse(JSON.stringify(E.schedOf(m)));
+        var list = E.expandTimes(it.schedule.times).map(function (t) { return E.gameMins(t) === from ? E.hhmm(to) : t; });
+        it.schedule.times = { mode: 'list', list: E.expandTimes({ mode: 'list', list: list }) };
+        var r = St.saveItem(it); root.App.render(); U.toast(r.frozen ? 'Done. From tomorrow we’ll remind you at ' + E.fmtTime(to) + '.' : 'Done. We’ll remind you at ' + E.fmtTime(to) + '.');
+      } });
     },
-    'mie-edit': function (el) { U.closeAll(); root.ItemEditor.open('edit', { id: el.getAttribute('data-m'), step: 2 }); },
-    'mie-two': function (el) { var m = St.medById(el.getAttribute('data-m')); if (m) { m.twoStep = true; S().settings.twoStep = true; St.save(); } U.closeAll(); root.App.render(); U.toast('Two taps are on: Pill out, then Swallowed.'); },
-    'mie-ack': function (el) { U.closeAll(); root.App.render(); U.toast(esc(el.getAttribute('data-msg'))); },
-    'mie-note': function (el) { var s = S(); s.flags.visitNotes = (s.flags.visitNotes || []).concat([{ day: s.day, itemId: el.getAttribute('data-m') || null }]); St.save(); U.closeAll(); root.App.render(); U.toast('Added to your notes for your next visit.'); },
-    'mie-save': function () { var t = (document.getElementById('mieText') || {}).value || ''; var s = S(); if (t.trim()) { s.today.notes = (s.today.notes || []).concat([t.trim().slice(0, 280)]); St.save(); } U.closeAll(); root.App.render(); U.toast('Saved to your record.'); },
-    'mie-supply': function (el) {
-      var m = St.medById(el.getAttribute('data-m')); if (!m) return; U.closeAll();
-      root.Wheel.sheet({ title: 'How much do you have?', intro: 'Days’ worth on hand.', cols: [root.Wheel.numCol(0, 365, 30, 'Supply', 'days')], onDone: function (v) { m.supply = v[0]; m.supplySetOn = S().day; St.save(); root.App.render(); U.toast('Supply set to ' + v[0] + ' days. We’ll remind you at 7.'); } });
+    // Turn on or adjust a reminder (for this item only; the global switch stays in Me).
+    'mie-rem': function (el) {
+      var m = St.medById(el.getAttribute('data-m')); if (!m) return; keepTyped(); U.closeAll();
+      var hab = isHabit(m), two = m.twoStep == null ? S().settings.twoStep : !!m.twoStep;
+      U.sheet('Reminder for ' + m.name, '<div class="set-group" style="margin:0"><div class="set-row"><span class="sr-main"><span class="sr-t" style="display:block">Remind me at these times</span><span class="sr-s">' + esc(timesLine(m).replace(/^Now: /, '')) + '</span></span><button type="button" class="toggle" role="switch" aria-checked="' + (m.reminders !== false) + '" aria-label="Reminders for ' + esc(m.name) + '" data-act="mie-remtoggle" data-m="' + m.id + '"></button></div>' +
+        (hab ? '' : '<div class="set-row"><span class="sr-main"><span class="sr-t" style="display:block">Two taps</span><span class="sr-s">Pill out when it’s in your hand, then Swallowed. Handy if you get sidetracked.</span></span><button type="button" class="toggle" role="switch" aria-checked="' + two + '" aria-label="Two taps" data-act="mie-twotoggle" data-m="' + m.id + '"></button></div>') + '</div>' +
+        (S().settings.reminders ? '' : '<p class="ie-hint" style="margin-top:10px">All reminders are off in Me right now.</p>') +
+        '<button type="button" class="btn btn-clin btn-block" data-act="sheet-close" style="margin-top:12px">Done</button>', { clin: true, onClose: function () { root.App.render(); } });
+    },
+    'mie-remtoggle': function (el) { var m = St.medById(el.getAttribute('data-m')); if (!m) return; m.reminders = m.reminders === false; St.save(); el.setAttribute('aria-checked', String(m.reminders)); U.toast(m.reminders ? 'Reminders are on for ' + esc(m.name) + '.' : 'Reminders are off for ' + esc(m.name) + '.'); },
+    'mie-twotoggle': function (el) { var m = St.medById(el.getAttribute('data-m')); if (!m) return; var two = m.twoStep == null ? S().settings.twoStep : !!m.twoStep; m.twoStep = !two; St.save(); el.setAttribute('aria-checked', String(m.twoStep)); },
+    'mie-tips': function (el) { var t = document.getElementById('mieTips'); if (!t) return; t.hidden = !t.hidden; el.setAttribute('aria-expanded', String(!t.hidden)); },
+    'mie-save': function (el) {
+      var t = document.getElementById('mieText'), v = t ? t.value.trim() : '';
+      if (!v) { U.toast('Type something first, or tap Done.'); if (t) t.focus(); return; }
+      St.addNote(+el.getAttribute('data-d'), el.getAttribute('data-m') || null, v); t.value = '';
+      U.closeAll(); root.App.render(); U.toast('Saved to your day.');
     },
     tier1: function (el) { var v = el.getAttribute('data-v'); if (v === 'two') S().settings.twoStep = true; St.save(); U.closeAll(); root.App.render(); U.toast('Two taps are on: Pill out, then Swallowed.'); },
     'barrier-pick': function (el) { var b = el.getAttribute('data-b'), m = el.getAttribute('data-m') || null; St.answerBarrier(b, m); U.closeAll(); root.App.render(); U.toast(E.barrierTier(b) >= 2 ? 'Thanks. Some help is on your Today screen.' : 'No problem.'); },
     'assist-done': function () { S().flags.assist = null; St.save(); root.App.render(); },
     'visit-note': function () { S().flags.assist = null; St.save(); root.App.render(); U.toast('Added to your notes for your next visit.'); },
-    refill: function (el) {
-      var id = el.getAttribute('data-m');
-      U.sheet('Refill', '<p style="font-weight:600">Steps that usually work:</p><ol style="padding-left:20px;font-weight:600;line-height:1.7"><li>Call or tap refill in your pharmacy’s app</li><li>If it needs a new prescription, the pharmacy can ask your prescriber</li><li>Pick it up or get it delivered</li></ol>' +
-        '<div class="opt-list" style="margin-top:12px"><button class="opt" data-act="refill-done" data-m="' + id + '"><span class="o-t">Done, I have it</span></button><button class="opt" data-act="barrier-pick" data-b="stock" data-m="' + id + '"><span class="o-t">The pharmacy is out of stock</span></button><button class="opt" data-act="barrier-pick" data-b="cost" data-m="' + id + '"><span class="o-t">Cost or insurance is a problem</span></button></div>', { clin: true, sub: 'Same reward whichever day you do it.' });
+    // A7 refill answers
+    'refill-in': function (el) {
+      var m = St.medById(el.getAttribute('data-m')); if (!m) return; U.closeAll();
+      U.sheet('Refill’s in', '<p class="ie-hint">How much did you get? Count pills, mL or puffs, the same way as your supply.</p><div class="field"><label for="refillAmt">I got</label><input class="input" id="refillAmt" type="number" inputmode="decimal" min="1" step="any" value="' + St.lastRefillAmount(m) + '"></div>' +
+        '<button type="button" class="btn btn-clin btn-block" data-act="refill-in-save" data-m="' + m.id + '">Save</button>', { clin: true, sub: esc(m.name) });
+      setTimeout(function () { var i = document.getElementById('refillAmt'); if (i) try { i.focus(); i.select(); } catch (e) { } }, 40);
     },
+    'refill-in-save': function (el) {
+      var id = el.getAttribute('data-m'), i = document.getElementById('refillAmt'), v = i ? parseFloat(i.value) : NaN;
+      if (!(v > 0)) { U.toast('Type how much you got, like 30.'); return; }
+      var r = St.refillIn(id, v); U.closeAll(); root.App.render();
+      if (r) U.toast('Nice, you’re stocked up' + (r.daysLeft != null && r.daysLeft < 400 ? ': about ' + r.daysLeft + ' days' : '') + '.' + (r.paid ? ' +' + r.paid.stars + ' ★' : ''));
+    },
+    'refill-no': function (el) { var m = St.medById(el.getAttribute('data-m')); if (!m) return; refillUndo = { id: m.id, supply: m.supply, setOn: m.supplySetOn, refill: JSON.parse(JSON.stringify(m.refill || {})) }; St.refillNotNeeded(m.id); U.closeAll(); root.App.render(); U.toast('Refill reminders are off for ' + esc(m.name) + '.', { undo: 'refill-undo' }); },
+    'refill-undo': function () { var u = refillUndo, m = u && St.medById(u.id); if (!m) return; m.supply = u.supply; m.supplySetOn = u.setOn; m.refill = u.refill; refillUndo = null; St.save(); root.App.render(); U.toast('Refill reminders are back on for ' + esc(m.name) + '.'); },
+    'refill-phone': function (el) { var id = el.getAttribute('data-m'), m = St.medById(id); U.sheet('Add your pharmacy’s number', '<div class="field"><label for="rfPhone">Phone number</label><input class="input" id="rfPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Like 555-0134"></div><p class="ie-hint">Then Call pharmacy rings it from the refill card. It stays on your phone.</p><button type="button" class="btn btn-clin btn-block" data-act="refill-phone-save" data-m="' + id + '">Save</button>', { clin: true, sub: m ? esc(m.name) : '' }); },
+    'refill-phone-save': function (el) { var m = St.medById(el.getAttribute('data-m')), i = document.getElementById('rfPhone'), v = i ? i.value.trim().slice(0, 30) : ''; if (!m || !/\d{3}/.test(v)) { U.toast('Type the phone number first.'); return; } m.pharmacy = v; St.save(); U.closeAll(); root.App.render(); U.toast('Saved. Call pharmacy is on the refill card.'); },
+    'refill-other': function (el) {
+      var m = St.medById(el.getAttribute('data-m')); if (!m) return; U.closeAll();
+      U.sheet('Something else', '<label class="mie-q" for="refillText">What’s going on? <span class="muted">(optional)</span></label><textarea class="input mie-text" id="refillText" rows="3" maxlength="280" placeholder="Type anything. Only you see this."></textarea>' +
+        '<p class="ie-hint">We’ll ask again in 3 days.</p><button type="button" class="btn btn-clin btn-block" data-act="refill-other-save" data-m="' + m.id + '">Save</button>' +
+        '<button type="button" class="btn btn-ghost btn-block" data-act="refill-no" data-m="' + m.id + '">Stop refill reminders for ' + esc(m.name) + '</button>', { clin: true, sub: esc(m.name) });
+    },
+    'refill-other-save': function (el) { var id = el.getAttribute('data-m'), t = document.getElementById('refillText'), r = St.refillOther(id, t ? t.value : ''); U.closeAll(); root.App.render(); if (r) U.toast('Got it. We’ll check in again on ' + E.fmtDate(r.askAgain) + '.'); },
     'swap-quest': function (el) { var r = St.completeCareQuest(el.getAttribute('data-m'), 'swap'); root.CollectionUI.setSeg('album'); root.App.setTab('collection'); if (r) U.toast('Goal done. +' + r.reward.stars + ' ★'); },
-    'refill-done': function (el) { var r = St.completeCareQuest(el.getAttribute('data-m'), 'refill'); U.closeAll(); root.App.render(); if (r) U.toast('Refill done. +' + r.reward.stars + ' ★'); },
     followup: function (el) { var r = St.completeCareQuest(el.getAttribute('data-m'), 'followup'); root.App.render(); if (r) U.toast('Nice. +' + r.reward.stars + ' ★'); },
     'pause-toggle': function (el) { var m = St.medById(el.getAttribute('data-m')); St.setPaused(m.id, !m.paused); St.replanToday(); U.closeAll(); root.App.render(); U.toast(m.paused ? 'Paused from tomorrow. Those days stay fully playable.' : 'Resumed.'); },
     report: function () { U.sheet('Report for my doctor', '<p style="font-weight:600">A plain summary of the last 30 days: each item, its schedule, and every entry with times. No points, no game.</p><div class="btn-row" style="margin-top:14px"><button class="btn btn-clin" data-act="fake-call" data-who="printer">Print or save PDF</button></div>', { clin: true }); }

@@ -23,7 +23,7 @@
   function habitOnly(st) { return st.kind === 'dose' && st.doses.length && st.doses.every(function (d) { var m = itemOf(d); return m && E.itemType(m) === 'habit'; }); }
   function anyHabit(st) { return st.doses.some(function (d) { var m = itemOf(d); return m && E.itemType(m) === 'habit'; }); }
   // Two taps (Pill out, then Swallowed) only when the check-in holds a medicine or vitamin set to two taps.
-  function stackTwoStep(st) { var g = S().settings.twoStep; return st.doses.some(function (d) { var m = itemOf(d); return m && E.itemType(m) !== 'habit' && (m.twoStep == null ? g : !!m.twoStep); }); }
+  function stackTwoStep(st) { var g = S().settings.twoStep; return st.doses.some(function (d) { var m = itemOf(d), t = m && E.itemType(m); return m && (t === 'med' || t === 'vitamin') && (m.twoStep == null ? g : !!m.twoStep); }); }
   // One function for "3 things" / "3 medicines" / "3 habits".
   function countWord(st) {
     var types = st.doses.map(function (d) { var m = itemOf(d); return m ? E.itemType(m) : 'med'; }), n = types.length;
@@ -98,7 +98,8 @@
     if (St.tripOvernight()) return overnightHero(open);
     var s = S(), t = s.today, back = s.trip.status === 'back' && !St.tripOvernight();
     var anyDone = t.plan.stacks.some(function (x) { var e = t.entries[x.id]; return e && e.state !== 'out'; });
-    var title = back ? she() + '’s back!' : anyDone ? 'Done for now' : she() + '’s ready';
+    var lastDone = t.plan.stacks.filter(function (x) { var e = t.entries[x.id]; return e && e.state !== 'out'; }).pop();
+    var title = back ? she() + '’s back!' : anyDone ? (St.refillsDue().length && lastDone ? lastDone.label + ' done' : 'Done for now') : she() + '’s ready';
     return '<section class="hero compact upcoming" aria-label="Today">' + A.scenery(s.theme) +
       '<div class="hero-inner compact-inner">' +
         '<button type="button" class="mini-comp comp-btn" id="compWrap" data-act="go" data-to="companion" aria-label="' + esc(she()) + ': level and gear"><div class="c-idle">' + A.companion(compDef(), 'happy', { aura: campAura() }) + '</div></button>' +
@@ -186,7 +187,7 @@
           : '<button class="btn btn-cta btn-block" data-act="ci" data-a="took" data-s="' + sid + '"><span class="big-ic">✓</span> ' + tookAll + '</button>';
         var second = twoStep
           ? '<button class="btn" data-act="ci" data-a="took" data-s="' + sid + '">✓ ' + tookAll + '</button>'
-          : '<button class="btn" data-act="pillout" data-s="' + sid + '">✋ ' + (n > 1 ? 'Pills out' : 'Pill out') + '</button>';
+          : (open.doses.some(function (d) { var m = itemOf(d), t = m && E.itemType(m); return t === 'med' || t === 'vitamin'; }) ? '<button class="btn" data-act="pillout" data-s="' + sid + '">✋ ' + (n > 1 ? 'Pills out' : 'Pill out') + '</button>' : '');
         body = primary + '<div class="answer-row">' + second + '<button class="btn" data-act="other-toggle" aria-expanded="' + ui.other + '">Other answer ' + (ui.other ? '▴' : '▾') + '</button></div>' + other;
       }
     }
@@ -220,10 +221,10 @@
   function weeklyHtml() {
     var done = St.headlineDone(), bd = St.bossDayThisWeek(), chest = esc(th().terms.chest.toLowerCase());
     if (bd != null) {
-      if (done) return '<div class="qcard weekly done"><span class="q-ic">✓</span><span class="q-text">This week: beat the Boss<span class="q-sub">Gold ' + chest + ' earned</span></span><span class="q-rew">Weekly</span></div>';
+      if (done) return '<button type="button" class="qcard weekly done" data-act="goal-done" data-g="weekly"><span class="q-ic">✓</span><span class="q-text">This week: beat the Boss<span class="q-sub">Gold ' + chest + ' earned</span></span><span class="q-rew">Weekly</span></button>';
       return '<button type="button" class="qcard weekly go" data-act="goal-go" data-g="boss"><span class="q-ic">⚔</span><span class="q-text">This week: beat the Boss on ' + (bd === S().day ? 'today’s dose' : esc(E.fmtDate(bd))) + '<span class="q-sub">Gold ' + chest + '</span></span><span class="q-rew">Weekly</span>' + A.icon('chev') + '</button>';
     }
-    if (done) return '<div class="qcard weekly done"><span class="q-ic">✓</span><span class="q-text">Load the week: fill your pill organizer<span class="q-sub">Gold ' + chest + ' earned</span></span><span class="q-rew">Weekly</span></div>';
+    if (done) return '<button type="button" class="qcard weekly done" data-act="goal-done" data-g="weekly"><span class="q-ic">✓</span><span class="q-text">Load the week: fill your pill organizer<span class="q-sub">Gold ' + chest + ' earned</span></span><span class="q-rew">Weekly</span></button>';
     return '<div class="qcard weekly go-row"><button type="button" class="q-main" data-act="goal-go" data-g="load"><span class="q-ic">🗓</span><span class="q-text">Load the week: fill your pill organizer<span class="q-sub">Gold ' + chest + ', once a week</span></span></button><button class="btn btn-soft q-btn" data-act="headline-done">Done</button></div>';
   }
   var QICON = { two: '🎲', checkin: '✅', run: '🎲', run2: '⭐', chest: '🎁', place: '🏕️', album: '📖' };
@@ -232,7 +233,7 @@
     var tm = th();
     return S().today.quests.map(function (q) {
       var txt = esc(Th.fill(q.text, tm)) + (q.swapped && !q.done ? ' <span class="q-new">new</span>' : '');
-      if (q.done) return '<div class="qcard done"><span class="q-ic">✓</span><span class="q-text">' + txt + '</span><span class="q-rew">+' + q.reward.stars + ' ★</span></div>';
+      if (q.done) return '<button type="button" class="qcard done" data-act="goal-done" data-g="' + q.id + '"><span class="q-ic">✓</span><span class="q-text">' + txt + '</span><span class="q-rew">+' + q.reward.stars + ' ★</span></button>';
       return '<button type="button" class="qcard go" data-act="goal-go" data-g="' + q.goal + '"><span class="q-ic">' + (QICON[q.goal] || '✨') + '</span><span class="q-text">' + txt + '</span><span class="q-rew">+' + q.reward.stars + ' ★</span>' + A.icon('chev') + '</button>';
     }).join('');
   }
@@ -245,6 +246,8 @@
       '<div class="prn-row">' + chips + (anyLogged ? '' : '<button class="prn-chip" data-act="prn-none" ' + (noneDone ? 'disabled style="opacity:.6"' : '') + '>' + (noneDone ? '✓ Noted: none needed' : 'Didn’t need any today') + '</button>') + '</div>' +
       (lastLines ? '<p class="prn-note">' + lastLines + '</p>' : '');
   }
+  // v5.6 (A7): a refill card every day from 7 days before it runs out, until it's answered.
+  function refillHtml() { return root.MedsUI && root.MedsUI.refillCards ? root.MedsUI.refillCards() : ''; }
   function assistHtml() {
     var a = S().flags.assist; if (!a || a.tier < 2) return '';
     return root.MedsUI.assistCard(a);
@@ -289,13 +292,15 @@
     var hr = safetyHtml(), open = St.openStack();
     // A high-risk alert never hides the check-in: plain safety card first, then a plain check-in card for the rest.
     var oph = open && E.stackPhase(open, s.today.entries[open.id], s.clock);
-    var html = top + hr + (hr ? (open ? '<section class="plain-stack">' + (oph === 'upcoming' && ui.early !== open.id && open.kind === 'dose' ? upNextHtml(open) : stackCardHtml(open, s.today.entries[open.id], oph, true)) + '</section>' : '') : heroHtml()) + assistHtml();
+    var html = top + hr + (hr ? (open ? '<section class="plain-stack">' + (oph === 'upcoming' && ui.early !== open.id && open.kind === 'dose' ? upNextHtml(open) : stackCardHtml(open, s.today.entries[open.id], oph, true)) + '</section>' : '') : heroHtml()) + assistHtml() + refillHtml();
     if (s.trip.status === 'back' && !St.tripOvernight()) html += '<div class="sec-h"><h2>This morning</h2></div>' + tripTile();
     var games = root.GamesUI ? root.GamesUI.card() : '';
     if (!s.settings.simple) {
       html += games;
+      if (!open || oph === 'upcoming') html += root.ProgressUI ? root.ProgressUI.readyCard() : ''; // after the check-in is answered
       if (s.trip.status !== 'back' && !St.tripOvernight()) html += '<div class="sec-h"><h2>Tonight’s ' + esc(tm.terms.trip.toLowerCase()) + '</h2></div>' + tripTile();
       html += chestsWaiting();
+      html += root.SocialUI ? root.SocialUI.todayCard() : '';
       html += '<div class="sec-h"><h2>Today’s goals</h2><span class="sub">' + s.today.quests.filter(function (q) { return q.done; }).length + ' of 3</span></div>' + questsHtml() + weeklyHtml();
     } else {
       html += root.CampUI ? root.CampUI.simpleLine() : '';
@@ -457,10 +462,10 @@
   // "Didn't take": thanks, the record line, then "Make it easier" inline. One tap from here reaches the help itself.
   function honestSheet(fx, st) {
     var tm = th(), hab = habitOnly(st), mid = st.doses[0] && st.doses[0].medId;
-    U.sheet('Thanks for telling me', '<div class="row" style="align-items:flex-start"><div style="width:84px;height:84px;flex:0 0 84px">' + A.companion(compDef(), 'happy') + '</div><div><p style="font-weight:700;font-size:1.02rem">“' + esc(tm.lines.honest) + '”</p>' +
+    U.sheet('Thanks for telling me', '<div class="row" style="align-items:flex-start"><div style="width:84px;height:84px;flex:0 0 84px">' + A.companion(compDef(), 'happy') + '</div><div><p style="font-weight:700;font-size:1.02rem">“That helps more than you’d think.”</p>' +
       '<div class="done-chips" style="margin-top:10px">' + (fx.compXp ? '<span class="chip ok">+' + fx.compXp + ' XP for ' + esc(she()) + '</span>' : '') + '' + (fx.quest ? '<span class="chip ok">✓ Check-in goal</span>' : '') + '<span class="chip neutral">Your record says “' + (hab ? 'Not today' : 'Not taken') + '”</span></div></div></div>' +
-      root.MedsUI.reasonsHtml(mid) +
-      '<button class="btn btn-ghost btn-block" data-act="sheet-close" style="margin-top:6px">Not now</button>');
+      root.MedsUI.easierHtml(mid, S().day) +
+      '<button class="btn btn-dark btn-block" data-act="sheet-close" style="margin-top:6px">Done</button>', root.MedsUI.sheetSaveOpts());
   }
   function unsureSheet(fx, st) {
     var e = S().today.entries[st.id];
@@ -472,34 +477,21 @@
       '<button class="btn btn-dark btn-block" style="margin-top:14px" data-act="sheet-close">OK</button>');
   }
 
+  /* "Did I take it?" (v5.6 A11): the same DaySheet as the calendar, for today, plus yesterday's fix rows. One set of words. */
   function ditSheet() {
-    var s = S(), t = s.today, rows = '';
-    t.plan.stacks.forEach(function (st) {
-      var e = t.entries[st.id], line, ic, bg;
-      if (st.kind === 'rest') { line = e ? 'Checked in at ' + E.fmtTime(e.at) + '. Nothing was due today.' : 'Nothing due today.'; ic = '☾'; bg = 'var(--neutral-bg)'; }
-      else if (!e) { line = 'No entry yet today. If you’re unsure, check your pill box or ask your pharmacist.'; ic = '○'; bg = 'var(--neutral-bg)'; }
-      else if (e.state === 'out') { line = 'Taken out at ' + E.fmtTime(e.outAt) + ', not confirmed swallowed. Check where you set it down.'; ic = '✋'; bg = 'var(--attn-bg)'; }
-      else if ((e.state === 'swallowed' || e.state === 'took') && e.loggedLater) { line = E.recordLabel(e, st, { clock: s.clock, habit: habitOnly(st) }).label + '.'; ic = '✓'; bg = 'var(--ok-bg)'; }
-      else if (e.state === 'swallowed' || e.state === 'took') { line = (e.outAt ? 'Out ' + E.fmtTime(e.outAt) + ', swallowed ' + E.fmtTime(e.at) : (habitOnly(st) ? 'Done at ' : 'Taken at ') + E.fmtTime(e.at)) + (e.later ? ' (logged later)' : '') + '.'; ic = '✓'; bg = 'var(--ok-bg)'; }
-      else { var rl = E.recordLabel(e, st, { clock: s.clock, habit: habitOnly(st) }); line = rl.label + ', logged ' + E.fmtTime(e.at) + '.'; ic = rl.icon; bg = 'var(--neutral-bg)'; }
-      var meds = st.doses.map(function (d) { var m = St.medById(d.medId); return m ? m.name + (d.label ? ' ' + d.label : '') : ''; }).join(', ');
-      rows += '<div class="fact"><span class="f-ic" style="background:' + bg + '">' + ic + '</span><div><div class="f-t">' + esc(st.kind === 'dose' ? st.label + ' · ' + E.fmtTime(st.mins) : stackTitle(st)) + '</div><div class="f-s">' + esc(line) + '</div>' + (meds ? '<div class="f-s" style="color:var(--muted);font-size:.85rem">' + esc(meds) + '</div>' : '') + '</div></div>';
-    });
-    t.prn.filter(function (p) { return p.medId; }).forEach(function (p) { var m = St.medById(p.medId); rows += '<div class="fact"><span class="f-ic" style="background:var(--neutral-bg)">•</span><div><div class="f-t">' + esc(m.name) + ' (as needed)</div><div class="f-s">Logged ' + E.fmtTime(p.at) + '.</div></div></div>'; });
-    var y = St.yesterday(), yRows = '';
+    var s = S(), y = St.yesterday(), yRows = '';
     if (y && s.day - y.dayNum <= 1) {
       y.plan.stacks.forEach(function (st) {
         var e = y.entries[st.id] || { state: 'none' };
         if (st.kind !== 'dose') return;
         var label = E.recordLabel(e, st, { past: true, habit: habitOnly(st) }).label;
-        var canFix = e.state === 'none' || e.state === 'unsure';
+        var canFix = (e.state === 'none' || e.state === 'unsure') && !(y.paid && y.paid[st.id]);
         yRows += '<div class="fact"><span class="f-ic" style="background:var(--neutral-bg)">' + (canFix ? '○' : '✓') + '</span><div class="grow"><div class="f-t">' + esc(st.label) + ' · ' + E.fmtTime(st.mins) + '</div><div class="f-s">' + esc(label) + '</div>' +
-          (canFix ? '<div class="btn-row" style="margin-top:8px"><button class="btn btn-soft" data-act="backfill" data-s="' + st.id + '" data-a="took">I took it</button><button class="btn btn-soft" data-act="backfill" data-s="' + st.id + '" data-a="didnt">Didn’t take</button></div>' : '') + '</div></div>';
+          (canFix ? '<div class="btn-row" style="margin-top:8px"><button class="btn btn-soft" data-act="backfill" data-s="' + st.id + '" data-a="took">' + (habitOnly(st) ? 'I did it' : 'I took it') + '</button><button class="btn btn-soft" data-act="backfill" data-s="' + st.id + '" data-a="didnt">' + (habitOnly(st) ? 'Not that day' : 'Didn’t take') + '</button></div>' : '') + '</div></div>';
       });
     }
-    U.sheet('Did I take it?', rows + (yRows ? '<h3 style="margin-top:16px;font-size:1rem;font-weight:900">Yesterday, ' + esc(E.fmtDate(y.dayNum)) + '</h3>' + yRows : '') +
-      '<button type="button" class="ds-help" data-act="see-earlier">See earlier days ›</button>' +
-      '<p class="muted" style="font-size:.85rem;font-weight:600;margin-top:14px">This shows what you logged, with exact times. It isn’t medical advice.</p>', { sub: esc(E.fmtDateLong(s.day)) + ' · now ' + E.fmtTime(s.clock) });
+    U.sheet('Did I take it?', '<div class="dit-day">' + root.MedsUI.daySheetBody(s.day) + '</div>' + (yRows ? '<h3 style="margin-top:16px;font-size:1rem;font-weight:900">Yesterday, ' + esc(E.fmtDate(y.dayNum)) + '</h3>' + yRows : '') +
+      '<button type="button" class="ds-help" data-act="see-earlier">See earlier days ›</button>', { clin: true, sub: esc(E.fmtDateLong(s.day)) + ' · now ' + E.fmtTime(s.clock) });
   }
 
   function prnSheet(medId) {
@@ -529,7 +521,7 @@
     var s = S(), tm = th(), h = s.trip.haul;
     var r = St.openTrip(); if (!r) return;
     U.sfx('chest');
-    var cards = h.finds.map(function (f, i) { var a = Th.findArt(tm, f.id); return '<div class="rcard flipped r-' + f.rarity + '" style="animation-delay:' + (i * 120) + 'ms"><div class="rc-in"><div class="rc-face rc-back">?</div><div class="rc-face rc-front"><span class="em">' + a.icon + '</span><span class="nm">' + esc(a.name) + '</span><span class="tag">' + (f.dup ? 'Duplicate' : 'New!') + '</span></div></div></div>'; }).join('');
+    var cards = h.finds.map(function (f, i) { var a = Th.findArt(tm, f.id); return '<div class="rcard flipped r-' + f.rarity + '" style="animation-delay:' + (i * 120) + 'ms"><div class="rc-in"><div class="rc-face rc-back">?</div><div class="rc-face rc-front"><span class="em">' + a.icon + '</span><span class="nm">' + esc(a.name) + '</span><span class="tag">' + (f.dup ? 'Spare' : 'New!') + '</span></div></div></div>'; }).join('');
     var loot = '<span>+' + h.stars + ' ★</span>' + (r.powerUp && !r.powerUp.converted ? '<span>+1 ' + esc(tm.powerUps[r.powerUp.type].name) + '</span>' : '');
     U.full('<div class="f-title">' + esc(she()) + '’s haul</div><div class="f-sub">' + h.finds.length + ' ' + esc(tm.terms.finds) + ' for your ' + esc(tm.terms.album) + (h.boost ? ' · boosted by your ' + esc(tm.powerUps[h.boost].name) : '') + '</div>' +
       '<div class="reveal-cards">' + cards + '</div><div class="loot-line">' + loot + '</div>' +
@@ -591,6 +583,13 @@
     'fake-call': function (el) { U.toast('This would call your ' + esc(el.getAttribute('data-who')) + ' (prototype).'); },
     'ov-next': function () { var top = U.topOverlay(); U.closeOverlay(top); },
     'goal-go': function (el) { goalGo(el.getAttribute('data-g')); },
+    // A11: a done goal opens a small "Done at…" sheet instead of being dead text.
+    'goal-done': function (el) {
+      var s = S(), g = el.getAttribute('data-g'), tm = th(), line;
+      if (g === 'weekly') { var w = (s.weekDoneAt || {})[E.weekIndex(s.day)]; line = 'Done' + (w ? (w.day === s.day ? ' today at ' : ' on ' + E.fmtDate(w.day) + ' at ') + E.fmtTime(w.at) : ' this week') + '. Gold ' + tm.terms.chest.toLowerCase() + ' earned.'; }
+      else { var q = s.today.quests.filter(function (x) { return x.id === g; })[0]; if (!q) return; line = 'Done' + (q.doneAt != null ? ' at ' + E.fmtTime(q.doneAt) : '') + '. +' + q.reward.stars + ' ★ added.'; }
+      U.sheet('Goal done ✓', '<p style="font-weight:800;font-size:1.05rem">' + esc(line) + '</p><p class="muted" style="font-weight:600">New goals show up every morning.</p><button class="btn btn-dark btn-block" style="margin-top:12px" data-act="sheet-close">OK</button>');
+    },
     'log-early': function (el) { ui.early = el.getAttribute('data-s'); root.App.render(); var c = document.querySelector('#view .stack-card'); if (c) { var b = c.querySelector('.btn-cta'); if (b) try { b.focus({ preventScroll: true }); } catch (e) { } } },
     'stars-sheet': function () { var s = S(), tm = th(); U.sheet('Stars ★', '<p style="font-weight:700">Stars are game money. You earn them from check-ins (any honest answer), daily games, goals and chests.</p><div class="fact"><span class="f-ic" style="background:var(--ok-bg)">★</span><div><div class="f-t">' + U.fmtNum(s.stars) + ' Stars</div><div class="f-s">Spend them on pieces for your ' + esc(tm.terms.home) + '.</div></div></div><p class="muted" style="font-size:.88rem;font-weight:600">Taking more never earns more. Every day is worth the same.</p><button class="btn btn-dark btn-block" style="margin-top:12px" data-act="goal-go" data-g="place">Spend them in Collection ›</button>'); },
     'spark-how': function () { var tm = th(), n = S().today.plan.stacks.length; U.sheet('How today’s ' + tm.terms.charge + ' fills', '<p style="font-weight:700">Every day is worth one full ' + esc(tm.terms.charge) + ', the same for everyone.</p><ul style="padding-left:20px;font-weight:600;line-height:1.6"><li>Today has ' + n + ' check-in' + (n === 1 ? '' : 's') + '. Each one fills ' + (n === 1 ? 'the whole thing' : 'an equal piece') + '.</li><li>Any honest answer counts toward ' + esc(she()) + '’s XP. “Didn’t take” still counts.</li><li>A full ' + esc(tm.terms.charge) + ' pops a power-up. Power-ups only add ' + esc(tm.terms.finds) + ', never game scores.</li><li>Rest days fill with one tap.</li></ul>'); }

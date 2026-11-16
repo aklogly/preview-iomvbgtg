@@ -30,6 +30,7 @@
     var name = top ? top.name : App.ui.tab;
     var key = name + JSON.stringify(top ? top.params : {});
     var keep = key === lastKey ? view.scrollTop : 0;
+    if (key !== lastKey && lastKey && root.UI.clearToast) root.UI.clearToast(); // a message belongs to the screen it was said on
     var fn = App.screens[name] || App.screens.today;
     view.innerHTML = fn(top ? top.params : null);
     view.scrollTop = keep;
@@ -38,8 +39,8 @@
     tabbar.classList.remove('hidden');
     var active = top && App.clinScreens[name] ? 'meds' : top && (name === 'privacy' || name === 'crew') ? 'me' : top && (name === 'leaderboard' || name === 'draw') ? 'today' : App.ui.tab;
     tabbar.innerHTML = TABS.map(function (t) {
-      var dot = t[0] === 'collection' && S.chests.some(function (c) { return !c.opened; }) ? '<span class="tab-dot" aria-hidden="true"></span>' : '';
-      return '<button class="tab ' + (active === t[0] ? 'active' : '') + '" data-act="tab" data-t="' + t[0] + '" aria-current="' + (active === t[0] ? 'page' : 'false') + '">' + A.icon(t[0]) + dot + '<span>' + t[1] + '</span></button>';
+      var dot = t[0] === 'collection' && (S.chests.some(function (c) { return !c.opened; }) || (root.ProgressUI && root.ProgressUI.anyReady())) ? '<span class="tab-dot" aria-hidden="true"></span>' : '';
+      return '<button class="tab ' + (active === t[0] ? 'active' : '') + '" data-act="tab" data-t="' + t[0] + '" aria-current="' + (active === t[0] ? 'page' : 'false') + '">' + A.icon(t[0] === 'meds' ? 'mylist' : t[0]) + dot + '<span>' + t[1] + '</span></button>';
     }).join('');
     var hook = App.afterHooks[name]; if (hook) hook();
     root.UI.placeBanner(false); // keep a live banner in place across re-renders
